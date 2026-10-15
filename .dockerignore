@@ -1,0 +1,10 @@
+.git
+.dart_tool
+build
+data
+.env
+config.yaml
+*.sqlite*
+*.tar.gz
+*.sha256
+release/

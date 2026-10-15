@@ -1,0 +1,18 @@
+name: merge_queue_bot
+description: A persistent GitLab batch merge queue.
+version: 0.1.0
+publish_to: none
+environment:
+  sdk: ^3.12.0
+dependencies:
+  args: ^2.7.0
+  crypto: ^3.0.6
+  http: ^1.6.0
+  path: ^1.9.1
+  sqlite3: ^3.1.0
+  yaml: ^3.1.3
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.29.0
+executables:
+  merge_queue_bot:

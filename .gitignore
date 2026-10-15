@@ -1,0 +1,7 @@
+.dart_tool/
+build/
+data/
+*.sqlite*
+.env
+*.tar.gz
+*.sha256

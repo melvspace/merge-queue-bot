@@ -1,0 +1,79 @@
+name: Checks
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact commit to check; empty uses the triggering revision.
+        required: false
+        type: string
+        default: ''
+      artifact-name:
+        description: Name of the uploaded Linux CLI bundle.
+        required: false
+        type: string
+        default: checked-bundle
+    outputs:
+      checked-sha:
+        description: Commit that passed all checks.
+        value: ${{ jobs.checks.outputs.checked-sha }}
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Dart and Docker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      checked-sha: ${{ steps.revision.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Record checked revision
+        id: revision
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.12.2
+      - name: Install dependencies
+        run: dart pub get --enforce-lockfile
+      - name: Check formatting
+        run: dart format --output=none --set-exit-if-changed bin lib test
+      - name: Analyze
+        run: dart analyze --fatal-infos
+      - name: Test
+        run: dart test --reporter expanded
+      - name: Build CLI bundle
+        run: dart build cli --target bin/merge_queue_bot.dart --output build
+      - name: Check CLI bundle
+        run: |
+          build/bundle/bin/merge_queue_bot --help
+          build/bundle/bin/merge_queue_bot --config config.example.yaml --check-config
+      - uses: docker/setup-buildx-action@v4
+      - name: Build container
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: merge-queue-bot:ci
+      - name: Check container
+        run: |
+          docker run --rm merge-queue-bot:ci --help
+          docker run --rm \
+            --mount "type=bind,src=$PWD/config.example.yaml,dst=/config/config.yaml,readonly" \
+            merge-queue-bot:ci --config /config/config.yaml --check-config
+      - name: Package CLI bundle
+        run: tar -czf merge-queue-bot-linux-x64.tar.gz -C build/bundle .
+      - name: Upload CLI bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: merge-queue-bot-linux-x64.tar.gz
+          if-no-files-found: error
+          retention-days: 14

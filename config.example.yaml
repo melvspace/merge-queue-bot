@@ -1,0 +1,13 @@
+gitlab_url: https://gitlab.example.com
+token_env: GITLAB_TOKEN
+# token_file: /run/secrets/gitlab_token
+database: data/queue.sqlite
+work_directory: data/repositories
+poll_interval_seconds: 30
+collect_window_seconds: 30
+max_batch_size: 10
+pipeline_discovery_seconds: 10
+pipeline_timeout_seconds: 3600
+projects:
+  - id: group/project
+    target_branches: [main]
