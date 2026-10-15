@@ -99,10 +99,13 @@ void main() {
           );
           expect(request.headers['PRIVATE-TOKEN'], _token);
           expect(request.followRedirects, isFalse);
+
           return _json(_project());
         });
         addTearDown(api.close);
+
         final project = await api.project('group/repository');
+
         expect(project.id, 1);
         expect(project.path, 'group/repository');
       },
@@ -114,11 +117,13 @@ void main() {
           request.url.toString(),
           'https://gitlab.example.test/gitlab/api/v4/projects/1/repository/branches/release%2F1+fix',
         );
+
         return _json({
           'commit': {'id': 'base-sha'},
         });
       });
       addTearDown(api.close);
+
       expect(await api.branchSha(1, 'release/1+fix'), 'base-sha');
     });
 
@@ -128,10 +133,13 @@ void main() {
         var calls = 0;
         final api = _gitlab((request) {
           calls++;
+
           return _json(_user(email: null));
         });
         addTearDown(api.close);
+
         final user = await api.currentUser();
+
         expect(user.email, '7-merge-bot@users.noreply.gitlab.example.test');
         expect(identical(await api.currentUser(), user), isTrue);
         expect(calls, 1);
@@ -148,6 +156,7 @@ void main() {
       test('rejects incompatible project settings $settings', () async {
         final api = _gitlab((request) => _json(_project(settings)));
         addTearDown(api.close);
+
         await expectLater(api.project('1'), throwsStateError);
       });
     }
@@ -160,6 +169,7 @@ void main() {
             (request) => _json(_project({'squash_option': option})),
           );
           addTearDown(api.close);
+
           expect((await api.project('1')).squashOption, option);
         },
       );
@@ -171,6 +181,7 @@ void main() {
         final data = _project()..remove('automatic_rebase_enabled');
         final api = _gitlab((request) => _json(data));
         addTearDown(api.close);
+
         expect((await api.project('1')).automaticRebase, isFalse);
       },
     );
@@ -182,6 +193,7 @@ void main() {
         }, status: 403),
       );
       addTearDown(api.close);
+
       await expectLater(
         api.currentUser(),
         throwsA(
@@ -203,7 +215,9 @@ void main() {
       var calls = 0;
       final api = _gitlab((request) {
         calls++;
+
         expect(request.followRedirects, isFalse);
+
         return http.Response(
           _token,
           302,
@@ -211,6 +225,7 @@ void main() {
         );
       });
       addTearDown(api.close);
+
       await expectLater(
         api.currentUser(),
         throwsA(
@@ -227,6 +242,7 @@ void main() {
     test('sanitizes transport errors and timeout failures', () async {
       final failed = _gitlab((request) => throw http.ClientException(_token));
       addTearDown(failed.close);
+
       await expectLater(
         failed.currentUser(),
         throwsA(
@@ -237,11 +253,13 @@ void main() {
           ),
         ),
       );
+
       final timedOut = _gitlab(
         (request) => Completer<http.Response>().future,
         requestTimeout: const Duration(milliseconds: 1),
       );
       addTearDown(timedOut.close);
+
       await expectLater(
         timedOut.currentUser(),
         throwsA(
@@ -260,6 +278,7 @@ void main() {
         () async {
           final api = _gitlab((request) => http.Response(payload, 200));
           addTearDown(api.close);
+
           await expectLater(
             api.currentUser(),
             throwsA(
@@ -287,7 +306,9 @@ void main() {
             request.url.queryParameters.containsKey('assignee_id'),
             isFalse,
           );
+
           pages.add(request.url.queryParameters['page']);
+
           if (pages.length == 1) {
             return _json(
               [
@@ -301,6 +322,7 @@ void main() {
               headers: {'x-next-page': '2'},
             );
           }
+
           return _json(
             [
               _mr(
@@ -321,7 +343,9 @@ void main() {
           );
         });
         addTearDown(api.close);
+
         final requests = await api.openMergeRequests(1, 'release/next');
+
         expect(pages, ['1', '2']);
         expect(requests.map((mr) => mr.iid), [12, 13]);
         expect(requests.first.assignees, isEmpty);
@@ -337,6 +361,7 @@ void main() {
     test('reads MR iid, state, draft and merge commit SHA', () async {
       final api = _gitlab((request) {
         expect(request.url.path, endsWith('/merge_requests/12'));
+
         return _json(
           _mr(
             changes: {
@@ -349,13 +374,17 @@ void main() {
         );
       });
       addTearDown(api.close);
+
       final request = await api.mergeRequest(1, 12);
+
       expect(request.state, 'merged');
       expect(request.draft, isTrue);
       expect(request.mergeCommitSha, 'landed-sha');
       expect(request.sourceProjectId, 52);
       expect(MergeRequest.fromJson(request.toJson()).sourceProjectId, 52);
+
       final legacy = request.toJson()..remove('sourceProjectId');
+
       expect(MergeRequest.fromJson(legacy).sourceProjectId, isNull);
       expect(request.createdAt, DateTime.utc(2026, 10, 10, 10));
     });
@@ -366,7 +395,9 @@ void main() {
       final methods = <String>[];
       final api = _gitlab((request) {
         methods.add(request.method);
+
         if (request.url.path.endsWith('/user')) return _json(_user());
+
         expect(
           request.url.queryParameters['source_branch'],
           'merge-queue/main',
@@ -375,17 +406,20 @@ void main() {
           request.url.queryParameters.containsKey('target_branch'),
           isFalse,
         );
+
         return _json([
           _batch({'detailed_merge_status': 'checking'}),
         ]);
       });
       addTearDown(api.close);
+
       final batch = await api.ensureBatch(
         1,
         'merge-queue/main',
         'main',
         'Contents',
       );
+
       expect(batch.iid, 33);
       expect(batch.sourceBranch, 'merge-queue/main');
       expect(batch.targetBranch, 'main');
@@ -404,10 +438,13 @@ void main() {
       test('refuses an unsafe existing branch MR: $changes', () async {
         final api = _gitlab((request) {
           expect(request.method, 'GET');
+
           if (request.url.path.endsWith('/user')) return _json(_user());
+
           return _json([_batch(changes)]);
         });
         addTearDown(api.close);
+
         await expectLater(
           api.ensureBatch(1, 'merge-queue/main', 'main', 'Contents'),
           throwsStateError,
@@ -418,14 +455,17 @@ void main() {
     test('findBatch paginates and rejects duplicate open queue MRs', () async {
       final api = _gitlab((request) {
         if (request.url.path.endsWith('/user')) return _json(_user());
+
         if (request.url.queryParameters['page'] == '1') {
           return _json([_batch()], headers: {'x-next-page': '2'});
         }
+
         return _json([
           _batch({'iid': 34}),
         ]);
       });
       addTearDown(api.close);
+
       await expectLater(
         api.findBatch(1, 'merge-queue/main', 'main'),
         throwsStateError,
@@ -438,14 +478,20 @@ void main() {
         Json? body;
         final api = _gitlab((request) {
           if (request.url.path.endsWith('/user')) return _json(_user());
+
           if (request.method == 'GET') return _json(<Object?>[]);
+
           expect(request.method, 'POST');
           expect(request.headers['content-type'], contains('application/json'));
+
           body = jsonDecode(request.body) as Json;
+
           return _json(_batch(), status: 201);
         });
         addTearDown(api.close);
+
         await api.ensureBatch(1, 'merge-queue/main', 'main', 'Contents');
+
         expect(body, containsPair('squash', false));
         expect(body, containsPair('remove_source_branch', false));
         expect(body, containsPair('source_branch', 'merge-queue/main'));
@@ -460,12 +506,17 @@ void main() {
         Json? body;
         final api = _gitlab((request) {
           if (request.url.path.endsWith('/user')) return _json(_user());
+
           if (request.method == 'GET') return _json(_batch());
+
           body = jsonDecode(request.body) as Json;
+
           return _json(_batch());
         });
         addTearDown(api.close);
+
         await api.describeBatch(1, 33, 'New contents');
+
         expect(body!['description'], '$_marker\n\nNew contents');
         expect(body!['squash'], isFalse);
         expect(body!['remove_source_branch'], isFalse);
@@ -478,23 +529,31 @@ void main() {
         Json? body;
         final api = _gitlab((request) {
           if (request.url.path.endsWith('/user')) return _json(_user());
+
           if (request.method == 'GET') return _json(_batch());
+
           expect(request.method, 'PUT');
           expect(request.url.path, endsWith('/merge_requests/33/merge'));
+
           body = jsonDecode(request.body) as Json;
+
           return _json(
             _batch({'state': 'merged', 'merge_commit_sha': 'candidate-sha'}),
           );
         });
         addTearDown(api.close);
+
         await api.mergeBatch(1, 33, 'candidate-sha');
+
         expect(body, {
           'sha': 'candidate-sha',
           'squash': false,
           'should_remove_source_branch': false,
           'auto_merge': false,
         });
+
         final batch = await api.batch(1, 33);
+
         expect(batch.sha, 'candidate-sha');
       },
     );
@@ -507,9 +566,13 @@ void main() {
         final visited = <String>[];
         final api = _gitlab((request) {
           if (request.url.path.endsWith('/user')) return _json(_user());
+
           final path = request.url.path;
+
           if (path.endsWith('/merge_requests/33')) return _json(_batch());
+
           visited.add('$path?page=${request.url.queryParameters['page']}');
+
           if (path.endsWith('/merge_requests/33/pipelines')) {
             if (request.url.queryParameters['page'] == '1') {
               return _json(
@@ -520,14 +583,17 @@ void main() {
                 headers: {'x-next-page': '2'},
               );
             }
+
             return _json([
               _pipeline(4, sha: 'obsolete-sha'),
               _pipeline(5, sha: 'synthetic-merged-result'),
               _pipeline(6, ref: 'refs/merge-requests/33/head'),
             ]);
           }
+
           expect(request.url.queryParameters['sha'], 'candidate-sha');
           expect(request.url.queryParameters['ref'], 'merge-queue/main');
+
           if (request.url.queryParameters['page'] == '1') {
             return _json(
               [
@@ -538,10 +604,13 @@ void main() {
               headers: {'x-next-page': '2'},
             );
           }
+
           return _json([_pipeline(2)]);
         });
         addTearDown(api.close);
+
         final pipelines = await api.pipelines(1, 33, 'candidate-sha');
+
         expect(pipelines.map((pipeline) => pipeline.id), [1, 2, 3, 6]);
         expect(visited, hasLength(4));
       },
@@ -551,10 +620,13 @@ void main() {
       final api = _gitlab((request) {
         expect(request.method, 'GET');
         expect(request.url.path, endsWith('/projects/1/pipelines/99'));
+
         return _json(_pipeline(99, status: 'failed'));
       });
       addTearDown(api.close);
+
       final pipeline = await api.pipeline(1, 99);
+
       expect(pipeline.status, 'failed');
       expect(pipeline.sha, 'candidate-sha');
     });
@@ -567,10 +639,13 @@ void main() {
         var writes = 0;
         final api = _gitlab((request) {
           if (request.url.path.endsWith('/user')) return _json(_user());
+
           if (request.method == 'POST') {
             writes++;
+
             return _json({'id': 42}, status: 201);
           }
+
           if (request.url.queryParameters['page'] == '1') {
             return _json(
               [
@@ -582,6 +657,7 @@ void main() {
               headers: {'x-next-page': '2'},
             );
           }
+
           return _json([
             {
               'body': 'Delivered.\n\n<!-- merge-queue-bot:landed:abc -->',
@@ -590,7 +666,9 @@ void main() {
           ]);
         });
         addTearDown(api.close);
+
         await api.commentOnce(1, 12, 'landed:abc', 'Delivered.');
+
         expect(writes, 0);
       },
     );
@@ -602,16 +680,21 @@ void main() {
         var writes = 0;
         final api = _gitlab((request) {
           if (request.url.path.endsWith('/user')) return _json(_user());
+
           if (request.method == 'GET') return _json(notes);
+
           final note = jsonDecode(request.body) as Json;
           note['author'] = _user();
           notes.add(note);
           writes++;
+
           return _json({'id': 42}, status: 201);
         });
         addTearDown(api.close);
+
         await api.commentOnce(1, 12, 'landed:abc', 'Delivered.');
         await api.commentOnce(1, 12, 'landed:abc', 'Delivered.');
+
         expect(writes, 1);
         expect(
           notes.single['body'],
@@ -624,6 +707,7 @@ void main() {
       var writes = 0;
       final api = _gitlab((request) {
         if (request.url.path.endsWith('/user')) return _json(_user());
+
         if (request.method == 'GET') {
           return _json([
             {
@@ -632,11 +716,15 @@ void main() {
             },
           ]);
         }
+
         writes++;
+
         return _json({'id': 42}, status: 201);
       });
       addTearDown(api.close);
+
       await api.commentOnce(1, 12, 'landed:abc', 'Delivered.');
+
       expect(writes, 1);
     });
 
@@ -647,14 +735,18 @@ void main() {
         final api = _gitlab((request) {
           expect(request.method, 'PUT');
           expect(request.url.path, endsWith('/merge_requests/12'));
+
           bodies.add(jsonDecode(request.body) as Json);
+
           return _json({'iid': 12});
         });
         addTearDown(api.close);
+
         await api.setAssignees(1, 12, [19, 20]);
         await api.setAssignees(1, 12, []);
         await api.closeMergeRequest(1, 12);
         await api.reopenMergeRequest(1, 12);
+
         expect(bodies, [
           {
             'assignee_ids': [19, 20],
@@ -674,16 +766,21 @@ void main() {
         final pages = <String?>[];
         final api = _gitlab((request) {
           pages.add(request.url.queryParameters['page']);
+
           if (pages.length == 1) {
             final next = request.url.replace(
               queryParameters: {...request.url.queryParameters, 'page': '2'},
             );
+
             return _json([_mr()], headers: {'link': '<$next>; rel="next"'});
           }
+
           return _json([_mr(iid: 13)]);
         });
         addTearDown(api.close);
+
         final requests = await api.openMergeRequests(1, 'main');
+
         expect(requests.map((mr) => mr.iid), [12, 13]);
         expect(pages, ['1', '2']);
       },
@@ -693,6 +790,7 @@ void main() {
       var calls = 0;
       final api = _gitlab((request) {
         calls++;
+
         return _json(
           [_mr()],
           headers: {
@@ -701,6 +799,7 @@ void main() {
         );
       });
       addTearDown(api.close);
+
       await expectLater(
         api.openMergeRequests(1, 'main'),
         throwsA(isA<RemoteException>()),
@@ -712,9 +811,11 @@ void main() {
       var calls = 0;
       final api = _gitlab((request) {
         calls++;
+
         return _json([_mr()], headers: {'x-next-page': '1'});
       });
       addTearDown(api.close);
+
       await expectLater(
         api.openMergeRequests(1, 'main'),
         throwsA(isA<RemoteException>()),

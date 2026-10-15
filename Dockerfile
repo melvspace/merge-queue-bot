@@ -1,7 +1,7 @@
-FROM dart:3.12.2-sdk AS build
+FROM dart:3.13.5-sdk AS build
 WORKDIR /app
 COPY pubspec.* ./
-RUN dart pub get
+RUN dart pub get --enforce-lockfile
 COPY . .
 RUN dart build cli --target bin/merge_queue_bot.dart --output build
 

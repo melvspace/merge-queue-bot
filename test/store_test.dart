@@ -25,6 +25,7 @@ void main() {
 
   test('creates fresh state without writing another queue', () {
     final state = store.load('1:main', 'merge-queue/main');
+
     expect(state.key, '1:main');
     expect(state.branch, 'merge-queue/main');
     expect(state.candidate, isNull);
@@ -69,11 +70,13 @@ void main() {
         ),
       ],
     );
+
     store.save(state);
     store.close();
     store = Store(database);
 
     final recovered = store.load('1:main', 'ignored-branch');
+
     expect(recovered.toJson(), state.toJson());
     expect(recovered.candidate!.members.single.toJson(), member.toJson());
     expect(recovered.candidate!.members.single.sourceProjectId, 123);
@@ -84,8 +87,10 @@ void main() {
     recovered.candidate!.pipelineIds = [];
     recovered.paused = null;
     recovered.rejections.clear();
+
     store.save(recovered);
     final updated = store.load('1:main', 'ignored-branch');
+
     expect(updated.candidate!.phase, 'landed');
     expect(updated.candidate!.pipelineIds, isEmpty);
     expect(updated.paused, isNull);
@@ -99,14 +104,18 @@ void main() {
       createdAt: firstPoll.subtract(const Duration(days: 2)),
     );
     final newerMr = mr(2, createdAt: firstPoll);
+
     store.observe('1:main', [newerMr], 99, firstPoll);
+
     final secondPoll = firstPoll.add(const Duration(seconds: 30));
     store.observe('1:main', [olderMr, newerMr], 99, secondPoll);
+
     store.close();
     store = Store(database);
     store.observe('1:main', [olderMr, newerMr], 99, secondPoll);
 
     final waiting = store.waiting('1:main', 99, 'main');
+
     expect(waiting.map((entry) => entry.mr.iid), [2, 1]);
     expect(waiting.map((entry) => entry.enqueuedAt), [firstPoll, secondPoll]);
   });
@@ -115,6 +124,7 @@ void main() {
     'breaks simultaneous assignment ties by creation time then MR number',
     () {
       final earlier = firstPoll.subtract(const Duration(days: 1));
+
       store.observe(
         '1:main',
         [mr(3), mr(2, createdAt: earlier), mr(1, createdAt: earlier)],
@@ -139,6 +149,7 @@ void main() {
       99,
       firstPoll,
     );
+
     expect(waitingIds(store), [1]);
 
     store.observe(
@@ -154,6 +165,7 @@ void main() {
       firstPoll.add(const Duration(seconds: 30)),
     );
     final waiting = store.waiting('1:main', 99, 'main');
+
     expect(waiting.map((entry) => entry.mr.iid), [1, 2, 3]);
     expect(waiting.first.mr.sha, 'updated-source');
     expect(waiting.map((entry) => entry.enqueuedAt), everyElement(firstPoll));
@@ -162,6 +174,7 @@ void main() {
 
   test('restores only previously observed assignees without guessing', () {
     expect(store.previousAssignees('1:main', 1), isEmpty);
+
     store.observe(
       '1:main',
       [
@@ -186,11 +199,14 @@ void main() {
       99,
       firstPoll,
     );
+
     expect(store.previousAssignees('1:main', 1), [7, 8]);
 
     store.close();
     store = Store(database);
+
     expect(store.previousAssignees('1:main', 1), [7, 8]);
+
     store.observe(
       '1:main',
       [
@@ -200,6 +216,7 @@ void main() {
       firstPoll,
     );
     store.observe('1:main', [mr(1)], 99, firstPoll);
+
     expect(store.previousAssignees('1:main', 1), [11]);
 
     store.observe(
@@ -211,17 +228,22 @@ void main() {
       99,
       firstPoll,
     );
+
     expect(store.previousAssignees('1:main', 2), isEmpty);
   });
 
   test('suppresses rejected items until an observed assignment cycle', () {
     store.observe('1:main', [mr(1), mr(2)], 99, firstPoll);
     store.suppress('1:main', 1);
+
     expect(waitingIds(store), [2]);
+
     store.close();
     store = Store(database);
+
     final later = firstPoll.add(const Duration(minutes: 1));
     store.observe('1:main', [mr(1, sha: 'new-head'), mr(2)], 99, later);
+
     expect(waitingIds(store), [2]);
 
     store.observe(
@@ -234,6 +256,7 @@ void main() {
       later,
     );
     store.observe('1:main', [mr(1), mr(2)], 99, later);
+
     expect(waitingIds(store), [2, 1]);
     expect(store.waiting('1:main', 99, 'main').last.enqueuedAt, later);
     expect(store.previousAssignees('1:main', 1), [7]);
@@ -243,10 +266,12 @@ void main() {
     store.observe('1:main', [mr(1), mr(2)], 99, firstPoll);
     store.suppress('1:main', 1);
     store.observe('1:main', [mr(2)], 99, firstPoll);
+
     expect(waitingIds(store), [2]);
 
     final later = firstPoll.add(const Duration(minutes: 1));
     store.observe('1:main', [mr(1), mr(2)], 99, later);
+
     expect(waitingIds(store), [2, 1]);
     expect(store.waiting('1:main', 99, 'main').last.enqueuedAt, later);
   });
@@ -278,7 +303,9 @@ void main() {
       expect(waitingIds(store, '2:main'), [1]);
       expect(store.previousAssignees('1:main', 1), [7]);
       expect(store.previousAssignees('2:main', 1), [8]);
+
       store.observe('1:main', [], 99, firstPoll);
+
       expect(waitingIds(store, '2:main'), [1]);
     },
   );

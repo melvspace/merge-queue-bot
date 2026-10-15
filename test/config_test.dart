@@ -11,8 +11,133 @@ projects:
 ''';
 
 void main() {
+  test('deserializes minimal JSON with the same defaults as YAML', () {
+    final config = BotConfig.fromJson({
+      'gitlab_url': 'https://gitlab.example.test',
+      'projects': [
+        {
+          'id': 'group/project',
+          'target_branches': ['main'],
+        },
+      ],
+    });
+    final yaml = BotConfig.parse(minimal);
+
+    expect(config.gitlabUrl, yaml.gitlabUrl);
+    expect(config.database, yaml.database);
+    expect(config.workDirectory, yaml.workDirectory);
+    expect(config.tokenEnvironment, yaml.tokenEnvironment);
+    expect(config.tokenFile, yaml.tokenFile);
+    expect(config.pollInterval, yaml.pollInterval);
+    expect(config.collectWindow, yaml.collectWindow);
+    expect(config.discoveryWindow, yaml.discoveryWindow);
+    expect(config.pipelineTimeout, yaml.pipelineTimeout);
+    expect(config.maxBatchSize, yaml.maxBatchSize);
+    expect(config.projects.single.id, yaml.projects.single.id);
+    expect(config.projects.single.targets, yaml.projects.single.targets);
+  });
+
+  test('deserializes wire keys and seconds without relying on YAML', () {
+    final config = BotConfig.fromJson({
+      'gitlab_url': 'https://gitlab.example.test/gitlab',
+      'database': '/data/state.sqlite',
+      'work_directory': '/data/clones',
+      'token_env': 'QUEUE_GITLAB_TOKEN',
+      'token_file': '/run/secrets/token',
+      'poll_interval_seconds': 3,
+      'collect_window_seconds': 0,
+      'pipeline_discovery_seconds': 0,
+      'pipeline_timeout_seconds': 900,
+      'max_batch_size': 4,
+      'projects': [
+        {
+          'id': 123,
+          'target_branches': ['main', 'release/1'],
+        },
+      ],
+    });
+
+    expect(config.gitlabUrl, Uri.parse('https://gitlab.example.test/gitlab'));
+    expect(config.database, '/data/state.sqlite');
+    expect(config.workDirectory, '/data/clones');
+    expect(config.tokenEnvironment, 'QUEUE_GITLAB_TOKEN');
+    expect(config.tokenFile, '/run/secrets/token');
+    expect(config.pollInterval, const Duration(seconds: 3));
+    expect(config.collectWindow, Duration.zero);
+    expect(config.discoveryWindow, Duration.zero);
+    expect(config.pipelineTimeout, const Duration(seconds: 900));
+    expect(config.maxBatchSize, 4);
+    expect(config.projects.single.id, '123');
+    expect(config.projects.single.targets, ['main', 'release/1']);
+  });
+
+  test('deserializes project IDs and target branches directly', () {
+    final numeric = ProjectConfig.fromJson({
+      'id': 123,
+      'target_branches': ['main', 'release/1'],
+    });
+    final named = ProjectConfig.fromJson({
+      'id': 'group/project',
+      'target_branches': ['main'],
+    });
+
+    expect(numeric.id, '123');
+    expect(numeric.targets, ['main', 'release/1']);
+    expect(named.id, 'group/project');
+    expect(named.targets, ['main']);
+  });
+
+  test('applies validation when deserializing JSON directly', () {
+    expect(
+      () => BotConfig.fromJson({
+        'gitlab_url': 'https://gitlab.example.test',
+        'pipeline_timeout_seconds': 10,
+        'projects': [
+          {
+            'id': 'group/project',
+            'target_branches': ['main'],
+          },
+        ],
+      }),
+      throwsFormatException,
+    );
+
+    expect(
+      () => BotConfig.fromJson({
+        'gitlab_url': 'https://gitlab.example.test',
+        'projects': [
+          {
+            'id': 'group/project',
+            'target_branches': ['main'],
+            'unknown': true,
+          },
+        ],
+      }),
+      throwsFormatException,
+    );
+  });
+
+  test('deserializes nested YAML maps and aliased target lists', () {
+    final config = BotConfig.parse('''
+gitlab_url: https://gitlab.example.test
+projects:
+  - id: 123
+    target_branches: &targets [main, release/1]
+  - id: group/other
+    target_branches: *targets
+''');
+
+    expect(config.projects.map((project) => project.id), [
+      '123',
+      'group/other',
+    ]);
+    expect(config.projects.first.targets, ['main', 'release/1']);
+    expect(config.projects.last.targets, ['main', 'release/1']);
+  });
+
   test('uses the agreed operational defaults', () {
     final config = BotConfig.parse(minimal);
+
     expect(config.gitlabUrl, Uri.parse('https://gitlab.example.test'));
     expect(config.database, 'data/queue.sqlite');
     expect(config.workDirectory, 'data/repositories');
@@ -47,6 +172,7 @@ projects:
   - id: another/project
     target_branches: [main]
 ''');
+
       expect(config.gitlabUrl.path, '/gitlab');
       expect(config.database, '/data/state.sqlite');
       expect(config.workDirectory, '/data/clones');
@@ -118,7 +244,7 @@ projects:
     'pipeline_timeout_seconds',
     'max_batch_size',
   ]) {
-    for (final value in ['-1', '1.5', "'10'", 'true']) {
+    for (final value in ['-1', '-9223372036854775808', '1.5', "'10'", 'true']) {
       test('rejects invalid $key value $value', () {
         expect(
           () => BotConfig.parse('$minimal$key: $value\n'),
@@ -156,6 +282,7 @@ projects:
     '[{id: project, target_branches: []}]',
     '[{id: project, target_branches: main}]',
     '[{id: true, target_branches: [main]}]',
+    '[{id: 1.5, target_branches: [main]}]',
     "[{id: '', target_branches: [main]}]",
     '[{id: project, target_branches: [main], unknown: true}]',
     "[{id: project, target_branches: ['']}]",
@@ -181,6 +308,7 @@ projects:
           BotConfig.parse('projects: [{id: project, target_branches: [main]}]'),
       throwsFormatException,
     );
+
     expect(
       () => BotConfig.parse('gitlab_url: https://gitlab.example.test'),
       throwsFormatException,
@@ -194,14 +322,17 @@ projects:
       Directory('/tmp/codex').createSync(recursive: true);
       temporary = Directory('/tmp/codex').createTempSync('queue-config-test-');
     });
+
     tearDown(() => temporary.deleteSync(recursive: true));
 
     test('reads and trims only the configured environment variable', () {
       final config = BotConfig.parse('${minimal}token_env: QUEUE_TOKEN\n');
+
       expect(
         config.readToken({'QUEUE_TOKEN': '  secret-token \n'}),
         'secret-token',
       );
+
       expect(
         () => config.readToken({'GITLAB_TOKEN': 'wrong-variable'}),
         throwsStateError,
@@ -212,11 +343,14 @@ projects:
       final file = File('${temporary.path}/token')
         ..writeAsStringSync('file-token\n');
       final config = BotConfig.parse('${minimal}token_file: ${file.path}\n');
+
       expect(
         config.readToken({'GITLAB_TOKEN': 'environment-token'}),
         'file-token',
       );
+
       file.writeAsStringSync('changed-token\n');
+
       expect(config.readToken({}), 'changed-token');
     });
 
@@ -225,6 +359,7 @@ projects:
         'rejects a missing or invalid token ${token == null ? 'null' : token.codeUnits}',
         () {
           final config = BotConfig.parse(minimal);
+
           expect(
             () => config.readToken({'GITLAB_TOKEN': ?token}),
             throwsStateError,
@@ -236,6 +371,7 @@ projects:
     test('rejects a blank token file even when environment has a token', () {
       final file = File('${temporary.path}/token')..writeAsStringSync(' \n ');
       final config = BotConfig.parse('${minimal}token_file: ${file.path}\n');
+
       expect(
         () => config.readToken({'GITLAB_TOKEN': 'fallback'}),
         throwsStateError,
@@ -246,6 +382,7 @@ projects:
       final config = BotConfig.parse(
         '${minimal}token_file: ${temporary.path}/missing\n',
       );
+
       expect(
         () => config.readToken({'GITLAB_TOKEN': 'fallback'}),
         throwsA(isA<FileSystemException>()),

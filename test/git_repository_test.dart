@@ -7,6 +7,7 @@ import 'package:test/test.dart';
 
 void main() {
   late _Fixture fixture;
+
   setUp(() async => fixture = await _Fixture.create());
   tearDown(() async => fixture.root.delete(recursive: true));
 
@@ -21,6 +22,7 @@ void main() {
         {'two.txt': 'independent change\n'},
       ]);
       final repository = fixture.repository();
+
       final sha = await repository.assemble(
         fixture.project,
         'main',
@@ -41,6 +43,7 @@ void main() {
         'origin',
         'refs/heads/merge-queue/main',
       ]);
+
       expect(
         await fixture.git(['rev-list', '--count', '${fixture.base}..$sha']),
         '2',
@@ -75,11 +78,14 @@ void main() {
         sha,
         null,
       );
+
       expect(
         await repository.remoteBranch(fixture.project, 'merge-queue/recovered'),
         sha,
       );
+
       await fixture.git(['push', '--quiet', 'origin', '$sha:refs/heads/main']);
+
       expect(await repository.contains(fixture.project, 'main', sha), isTrue);
       expect(
         await repository.remoteBranch(fixture.project, first.sourceBranch),
@@ -98,6 +104,7 @@ void main() {
         {'shared.txt': 'second\n'},
       ]);
       final repository = fixture.repository();
+
       await expectLater(
         repository.assemble(fixture.project, 'main', fixture.base, [
           first,
@@ -105,6 +112,7 @@ void main() {
         ], fixture.timestamp),
         throwsA(isA<AssemblyConflict>().having((error) => error.iid, 'iid', 2)),
       );
+
       final sha = await repository.assemble(
         fixture.project,
         'main',
@@ -119,6 +127,7 @@ void main() {
         sha,
         null,
       );
+
       expect(
         await repository.remoteBranch(fixture.project, 'main'),
         fixture.base,
@@ -137,6 +146,7 @@ void main() {
         {'one.txt': 'one\n'},
       ], title: '[SKIP CI] Change [ci skip] 1');
       final repository = fixture.repository();
+
       final sha = await repository.assemble(
         fixture.project,
         'main',
@@ -158,9 +168,11 @@ void main() {
         'refs/heads/merge-queue/main',
       ]);
       final message = await fixture.git(['log', '-1', '--format=%B', sha]);
+
       expect(message.toLowerCase(), isNot(contains('[skip ci]')));
       expect(message.toLowerCase(), isNot(contains('[ci skip]')));
       expect(message, startsWith('Change  1'));
+
       await fixture.git(['push', '--quiet', 'origin', '$sha:refs/heads/main']);
       await expectLater(
         repository.assemble(fixture.project, 'main', sha, [
@@ -184,6 +196,7 @@ void main() {
         {'one.txt': 'one\n'},
       ]);
       final repository = fixture.repository();
+
       final first = await repository.assemble(
         fixture.project,
         'main',
@@ -219,10 +232,9 @@ void main() {
         '-m',
         'Additional source change',
       ]);
-      final updated = MergeRequest.fromJson({
-        ...member.toJson(),
-        'sha': await fixture.git(['rev-parse', 'HEAD']),
-      });
+      final updated = member.copyWith(
+        sha: await fixture.git(['rev-parse', 'HEAD']),
+      );
       await fixture.git([
         'push',
         '--quiet',
@@ -230,6 +242,7 @@ void main() {
         'HEAD:refs/heads/source-1',
         'HEAD:refs/merge-requests/1/head',
       ]);
+
       final second = await repository.assemble(fixture.project, 'main', first, [
         updated,
       ], fixture.timestamp);
@@ -246,6 +259,7 @@ void main() {
         'origin',
         'refs/heads/merge-queue/main',
       ]);
+
       expect(
         await fixture.git(['diff', '--name-only', first, second]),
         'two.txt',
@@ -259,6 +273,7 @@ void main() {
         await fixture.git(['rev-list', '--count', '$first..$second']),
         '1',
       );
+
       await fixture.git([
         'push',
         '--quiet',
@@ -275,10 +290,9 @@ void main() {
         '-am',
         'Overlapping source update',
       ]);
-      final overlapping = MergeRequest.fromJson({
-        ...member.toJson(),
-        'sha': await fixture.git(['rev-parse', 'HEAD']),
-      });
+      final overlapping = member.copyWith(
+        sha: await fixture.git(['rev-parse', 'HEAD']),
+      );
       await fixture.git([
         'push',
         '--quiet',
@@ -306,6 +320,7 @@ void main() {
       final member = await fixture.mr(1, [
         {'one.txt': 'one\n'},
       ]);
+
       await fixture.write('one.txt', 'updated\n');
       await fixture.git(['commit', '--quiet', '-am', 'Updated source']);
       await fixture.git([
@@ -315,6 +330,7 @@ void main() {
         'HEAD:refs/merge-requests/1/head',
       ]);
       final repository = fixture.repository();
+
       await expectLater(
         repository.assemble(fixture.project, 'main', fixture.base, [
           member,
@@ -327,6 +343,7 @@ void main() {
           ),
         ),
       );
+
       await fixture.git(['push', '--quiet', 'origin', 'HEAD:refs/heads/main']);
       await expectLater(
         repository.assemble(
@@ -355,6 +372,7 @@ void main() {
       {'two.txt': 'two\n'},
     ]);
     final repository = fixture.repository();
+
     final firstSha = await repository.assemble(
       fixture.project,
       'main',
@@ -376,6 +394,7 @@ void main() {
       firstSha,
       null,
     );
+
     await expectLater(
       repository.publish(
         fixture.project,
@@ -390,6 +409,7 @@ void main() {
       await repository.remoteBranch(fixture.project, 'merge-queue/main'),
       firstSha,
     );
+
     await repository.publish(
       fixture.project,
       'main',
@@ -397,6 +417,7 @@ void main() {
       secondSha,
       firstSha,
     );
+
     await expectLater(
       repository.publish(
         fixture.project,
@@ -411,6 +432,7 @@ void main() {
       await repository.remoteBranch(fixture.project, 'merge-queue/main'),
       secondSha,
     );
+
     await expectLater(
       repository.publish(
         fixture.project,
@@ -437,6 +459,7 @@ void main() {
         'main:refs/heads/release',
       ]);
       await fixture.git(['branch', 'release', 'main']);
+
       final mainMember = await fixture.mr(1, [
         {'main.txt': 'main\n'},
       ]);
@@ -444,6 +467,7 @@ void main() {
         {'release.txt': 'release\n'},
       ], target: 'release');
       final repository = fixture.repository();
+
       final candidates = await Future.wait([
         repository.assemble(fixture.project, 'main', fixture.base, [
           mainMember,
@@ -466,6 +490,7 @@ void main() {
         candidates[1],
         null,
       );
+
       await expectLater(
         repository.publish(
           fixture.project,
@@ -491,6 +516,7 @@ void main() {
     'rejects credential-bearing and foreign clone URLs and unsafe refs',
     () async {
       final repository = fixture.repository();
+
       for (final url in [
         'https://other.example.test/repo.git',
         'https://oauth2:secret@gitlab.example.test/repo.git',
@@ -502,6 +528,7 @@ void main() {
           throwsArgumentError,
         );
       }
+
       await expectLater(
         repository.remoteBranch(fixture.project, '../main'),
         throwsArgumentError,
@@ -519,6 +546,7 @@ void main() {
       final member = await fixture.mr(1, [
         {'one.txt': 'one\n'},
       ]);
+
       await fixture.write('one.txt', 'one\ntwo\n');
       await fixture.git(['commit', '--quiet', '-am', 'New source commit']);
       final latest = await fixture.git(['rev-parse', 'HEAD']);
@@ -529,9 +557,12 @@ void main() {
         'HEAD:refs/heads/source-1',
       ]);
       final repository = fixture.repository();
+
       expect(await repository.sourceSha(fixture.project, member), latest);
       expect(latest, isNot(member.sha));
+
       await fixture.git(['push', '--quiet', 'origin', ':refs/heads/source-1']);
+
       expect(await repository.sourceSha(fixture.project, member), isNull);
     },
   );
@@ -546,6 +577,7 @@ void main() {
         {'unknown.txt': 'unknown\n'},
       ], sourceProjectId: null);
       final repository = fixture.repository();
+
       await fixture.git([
         'push',
         '--quiet',
@@ -553,46 +585,48 @@ void main() {
         ':refs/heads/source-1',
         ':refs/heads/source-2',
       ]);
+
       expect(await repository.sourceSha(fixture.project, fork), fork.sha);
       expect(await repository.sourceSha(fixture.project, unknown), unknown.sha);
+
       await fixture.git([
         'push',
         '--quiet',
         'origin',
         ':refs/merge-requests/1/head',
       ]);
+
       expect(await repository.sourceSha(fixture.project, fork), isNull);
     },
   );
 }
 
-class _Fixture {
-  final Directory root;
-  final String seed;
-  final String bare;
+class _Fixture(final Directory root) {
+  final String seed = p.join(root.path, 'seed');
+  final String bare = p.join(root.path, 'remote.git');
   late final String base;
   final timestamp = DateTime.utc(2026, 10, 15, 12);
-  _Fixture(this.root)
-    : seed = p.join(root.path, 'seed'),
-      bare = p.join(root.path, 'remote.git');
 
   static Future<_Fixture> create() async {
     final temporary = await Directory('/tmp/codex').create(recursive: true);
     final fixture = _Fixture(
       await temporary.createTemp('git-repository-test-'),
     );
+
     await Directory(fixture.seed).create();
     await fixture.git(['init', '--quiet', '--bare', fixture.bare]);
     await fixture.git(['init', '--quiet', '--initial-branch=main']);
     await fixture.git(['config', 'user.name', 'Test Author']);
     await fixture.git(['config', 'user.email', 'test@example.test']);
     await fixture.git(['config', 'commit.gpgsign', 'false']);
+
     await fixture.write('shared.txt', 'base\n');
     await fixture.git(['add', '.']);
     await fixture.git(['commit', '--quiet', '-m', 'Base']);
     fixture.base = await fixture.git(['rev-parse', 'HEAD']);
     await fixture.git(['remote', 'add', 'origin', fixture.bare]);
     await fixture.git(['push', '--quiet', 'origin', 'main']);
+
     return fixture;
   }
 
@@ -623,13 +657,16 @@ class _Fixture {
     int? sourceProjectId = 1,
   }) async {
     await git(['checkout', '--quiet', '-b', 'source-$iid', target]);
+
     for (final changes in commits) {
       for (final entry in changes.entries) {
         await write(entry.key, entry.value);
       }
+
       await git(['add', '.']);
       await git(['commit', '--quiet', '-m', 'Source commit']);
     }
+
     final sha = await git(['rev-parse', 'HEAD']);
     await git([
       'push',
@@ -638,6 +675,7 @@ class _Fixture {
       'HEAD:refs/heads/source-$iid',
       'HEAD:refs/merge-requests/$iid/head',
     ]);
+
     return MergeRequest(
       iid: iid,
       title: title ?? 'Change $iid',
@@ -671,9 +709,11 @@ class _Fixture {
         'GIT_CONFIG_GLOBAL': '/dev/null',
       },
     );
+
     if (result.exitCode != 0) {
       throw StateError('git ${arguments.join(' ')}: ${result.stderr}');
     }
+
     return (result.stdout as String).trim();
   }
 }

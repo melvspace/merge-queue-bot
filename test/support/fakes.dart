@@ -37,25 +37,6 @@ MergeRequest member(
   sourceProjectId: sourceProjectId,
 );
 
-MergeRequest changeMember(
-  MergeRequest old, {
-  String? sha,
-  String? state,
-  bool? draft,
-  String? target,
-  List<int>? assignees,
-}) => member(
-  old.iid,
-  sha: sha ?? old.sha,
-  state: state ?? old.state,
-  target: target ?? old.targetBranch,
-  source: old.sourceBranch,
-  draft: draft ?? old.draft,
-  assignees: assignees ?? old.assignees,
-  createdAt: old.createdAt,
-  sourceProjectId: old.sourceProjectId,
-);
-
 class FakeHosting implements Hosting {
   final Map<int, MergeRequest> members = {};
   final Map<int, BatchRef> batches = {};
@@ -117,6 +98,7 @@ class FakeHosting implements Hosting {
         return batch;
       }
     }
+
     return null;
   }
 
@@ -131,7 +113,9 @@ class FakeHosting implements Hosting {
     String description,
   ) async {
     final existing = await findBatch(projectId, branch, target);
+
     if (existing != null) return existing;
+
     final iid = _nextBatch++;
     final created = BatchRef(
       iid,
@@ -145,10 +129,12 @@ class FakeHosting implements Hosting {
     batches[iid] = created;
     batchBranches[iid] = branch;
     descriptions[iid] = description;
+
     if (failEnsureAfterCreate) {
       failEnsureAfterCreate = false;
       throw const RemoteException('MR create response lost');
     }
+
     return created;
   }
 
@@ -164,6 +150,7 @@ class FakeHosting implements Hosting {
     String sha,
   ) async {
     discoveredShas.add(sha);
+
     // Include other SHAs deliberately: the engine must enforce its own binding.
     return pipelineData.values.toList();
   }
@@ -171,6 +158,7 @@ class FakeHosting implements Hosting {
   @override
   Future<Pipeline> pipeline(int projectId, int pipelineId) async {
     pipelineReads.add(pipelineId);
+
     return pipelineData[pipelineId]!;
   }
 
@@ -178,28 +166,24 @@ class FakeHosting implements Hosting {
   Future<void> mergeBatch(int projectId, int iid, String sha) async {
     mergeAttempts.add(iid);
     await beforeMerge?.call();
+
     if (failNextMerge case final error?) {
       failNextMerge = null;
       throw error;
     }
+
     final old = batches[iid]!;
+
     if (old.sha != sha || old.state != 'opened') {
       throw const RemoteException('Merge precondition failed', statusCode: 409);
     }
+
     mergedShas.add(sha);
     mergedBatches.add(iid);
-    batches[iid] = BatchRef(
-      iid,
-      old.url,
-      'merged',
-      sha,
-      mergeCommitSha: sha,
-      sourceBranch: old.sourceBranch,
-      targetBranch: old.targetBranch,
-      detailedMergeStatus: old.detailedMergeStatus,
-    );
+    batches[iid] = old.copyWith(state: 'merged', sha: sha, mergeCommitSha: sha);
     branches['main'] = sha;
     landedShas.add(sha);
+
     if (failMergeAfterLanding) {
       failMergeAfterLanding = false;
       throw const RemoteException('Merge response lost');
@@ -215,6 +199,7 @@ class FakeHosting implements Hosting {
   ) async {
     comments.putIfAbsent('$iid:$marker', () => body);
     await afterComment?.call(iid);
+
     if (failCommentAfterWrite) {
       failCommentAfterWrite = false;
       throw const RemoteException('Comment response lost');
@@ -223,7 +208,8 @@ class FakeHosting implements Hosting {
 
   @override
   Future<void> setAssignees(int projectId, int iid, List<int> assignees) async {
-    members[iid] = changeMember(members[iid]!, assignees: assignees);
+    members[iid] = members[iid]!.copyWith(assignees: assignees);
+
     if (failAssigneesAfterWrite) {
       failAssigneesAfterWrite = false;
       throw const RemoteException('Assignment response lost');
@@ -233,28 +219,24 @@ class FakeHosting implements Hosting {
   @override
   Future<void> closeMergeRequest(int projectId, int iid) async {
     closedMembers.add(iid);
-    members[iid] = changeMember(members[iid]!, state: 'closed');
+    members[iid] = members[iid]!.copyWith(state: 'closed');
     await afterClose?.call(iid);
   }
 
   @override
   Future<void> reopenMergeRequest(int projectId, int iid) async {
     reopenedMembers.add(iid);
-    members[iid] = changeMember(members[iid]!, state: 'opened');
+    members[iid] = members[iid]!.copyWith(state: 'opened');
   }
 
   void recordPush(String branch, String sha) {
     publishedSha = sha;
+
     for (final existing in batches.values.toList()) {
       if (existing.state == 'opened' && batchBranches[existing.iid] == branch) {
-        batches[existing.iid] = BatchRef(
-          existing.iid,
-          existing.url,
-          existing.state,
-          sha,
-          sourceBranch: existing.sourceBranch,
-          targetBranch: existing.targetBranch,
-          detailedMergeStatus: existing.detailedMergeStatus,
+        batches[existing.iid] = existing.copyWith(
+          sha: sha,
+          mergeCommitSha: null,
         );
       }
     }
@@ -262,14 +244,8 @@ class FakeHosting implements Hosting {
 
   void setBatchStatus(int iid, String? status, {String? state}) {
     final old = batches[iid]!;
-    batches[iid] = BatchRef(
-      iid,
-      old.url,
-      state ?? old.state,
-      old.sha,
-      mergeCommitSha: old.mergeCommitSha,
-      sourceBranch: old.sourceBranch,
-      targetBranch: old.targetBranch,
+    batches[iid] = old.copyWith(
+      state: state ?? old.state,
       detailedMergeStatus: status,
     );
   }
@@ -278,30 +254,22 @@ class FakeHosting implements Hosting {
   void close() {}
 }
 
-class Assembly {
-  final String base;
-  final List<int> members;
-  final DateTime timestamp;
-  final String sha;
-  Assembly(this.base, this.members, this.timestamp, this.sha);
-}
+class Assembly(
+  final String base,
+  final List<int> members,
+  final DateTime timestamp,
+  final String sha,
+);
 
-class Publication {
-  final String branch;
-  final String sha;
-  final String? lease;
-  Publication(this.branch, this.sha, this.lease);
-}
+class Publication(final String branch, final String sha, final String? lease);
 
-class FakeRepository implements Repository {
-  final FakeHosting hosting;
+class FakeRepository(final FakeHosting hosting) implements Repository {
   final Map<String, String> branches = {};
   final List<Assembly> assemblies = [];
   final List<Publication> publications = [];
   final Set<int> conflicts = {};
   final Map<int, String?> sourceShas = {};
   bool failPublishAfterPush = false;
-  FakeRepository(this.hosting);
 
   @override
   Future<String> assemble(
@@ -316,10 +284,12 @@ class FakeRepository implements Repository {
         throw AssemblyConflict(mr.iid, 'shared file conflict');
       }
     }
+
     final sha = 'candidate-${assemblies.length + 1}';
     assemblies.add(
       Assembly(baseSha, members.map((mr) => mr.iid).toList(), timestamp, sha),
     );
+
     return sha;
   }
 
@@ -344,9 +314,11 @@ class FakeRepository implements Repository {
     if (branches[branch] != expectedRemoteSha) {
       throw const RemoteException('Branch lease changed');
     }
+
     publications.add(Publication(branch, sha, expectedRemoteSha));
     branches[branch] = sha;
     hosting.recordPush(branch, sha);
+
     if (failPublishAfterPush) {
       failPublishAfterPush = false;
       throw const RemoteException('Push response lost');

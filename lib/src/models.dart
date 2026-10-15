@@ -1,30 +1,24 @@
+import 'package:freezed_annotation/freezed_annotation.dart';
+
+part 'models.freezed.dart';
+part 'models.g.dart';
+
 typedef Json = Map<String, dynamic>;
 
-class BotUser {
-  final int id;
-  final String name;
-  final String email;
-  const BotUser(this.id, this.name, this.email);
-}
+@freezed
+class const BotUser(final int id, final String name, final String email)
+    with _$BotUser;
 
-class Project {
-  final int id;
-  final String path;
-  final String cloneUrl;
-  final String mergeMethod;
-  final String squashOption;
-  final bool automaticRebase;
-  final bool mergedResultsPipelines;
-  const Project({
-    required this.id,
-    required this.path,
-    required this.cloneUrl,
-    required this.mergeMethod,
-    required this.squashOption,
-    required this.automaticRebase,
-    this.mergedResultsPipelines = false,
-  });
-
+@freezed
+class const Project({
+  required final int id,
+  required final String path,
+  required final String cloneUrl,
+  required final String mergeMethod,
+  required final String squashOption,
+  required final bool automaticRebase,
+  final bool mergedResultsPipelines = false,
+}) with _$Project {
   void validate() {
     if (mergeMethod != 'ff' ||
         !const {'never', 'default_off', 'default_on'}.contains(squashOption) ||
@@ -39,121 +33,60 @@ class Project {
   }
 }
 
-class MergeRequest {
-  final int iid;
-  final String title;
-  final String url;
-  final String sha;
-  final String targetBranch;
-  final String sourceBranch;
-  final String state;
-  final bool draft;
-  final List<int> assignees;
-  final String authorName;
-  final String authorEmail;
-  final DateTime createdAt;
-  final String? mergeCommitSha;
-  final int? sourceProjectId;
-
-  const MergeRequest({
-    required this.iid,
-    required this.title,
-    required this.url,
-    required this.sha,
-    required this.targetBranch,
-    required this.sourceBranch,
-    required this.state,
-    required this.draft,
-    required this.assignees,
-    required this.authorName,
-    required this.authorEmail,
-    required this.createdAt,
-    this.mergeCommitSha,
-    this.sourceProjectId,
-  });
-
+@freezed
+@JsonSerializable()
+class const MergeRequest({
+  required final int iid,
+  required final String title,
+  required final String url,
+  required final String sha,
+  @JsonKey(name: 'target') required final String targetBranch,
+  @JsonKey(name: 'source') required final String sourceBranch,
+  required final String state,
+  required final bool draft,
+  required final List<int> assignees,
+  required final String authorName,
+  required final String authorEmail,
+  required final DateTime createdAt,
+  final String? mergeCommitSha,
+  final int? sourceProjectId,
+}) with _$MergeRequest {
   bool eligible(int botId, String target) =>
       state == 'opened' &&
       !draft &&
       targetBranch == target &&
       assignees.contains(botId);
 
-  Json toJson() => {
-    'iid': iid,
-    'title': title,
-    'url': url,
-    'sha': sha,
-    'target': targetBranch,
-    'source': sourceBranch,
-    'state': state,
-    'draft': draft,
-    'assignees': assignees,
-    'authorName': authorName,
-    'authorEmail': authorEmail,
-    'createdAt': createdAt.toIso8601String(),
-    'mergeCommitSha': mergeCommitSha,
-    'sourceProjectId': sourceProjectId,
-  };
+  factory MergeRequest.fromJson(Json json) => _$MergeRequestFromJson(json);
 
-  factory MergeRequest.fromJson(Json j) => MergeRequest(
-    iid: j['iid'] as int,
-    title: j['title'] as String,
-    url: j['url'] as String,
-    sha: j['sha'] as String,
-    targetBranch: j['target'] as String,
-    sourceBranch: j['source'] as String,
-    state: j['state'] as String,
-    draft: j['draft'] as bool,
-    assignees: (j['assignees'] as List).cast<int>(),
-    authorName: j['authorName'] as String,
-    authorEmail: j['authorEmail'] as String,
-    createdAt: DateTime.parse(j['createdAt'] as String),
-    mergeCommitSha: j['mergeCommitSha'] as String?,
-    sourceProjectId: j['sourceProjectId'] as int?,
-  );
+  Json toJson() => _$MergeRequestToJson(this);
 }
 
-class Pipeline {
-  final int id;
-  final String sha;
-  final String status;
-  const Pipeline(this.id, this.sha, this.status);
-}
+@freezed
+class const Pipeline(final int id, final String sha, final String status)
+    with _$Pipeline;
 
-class BatchRef {
-  final int iid;
-  final String url;
-  final String state;
-  final String sha;
-  final String? mergeCommitSha;
-  final String? sourceBranch;
-  final String? targetBranch;
-  final String? detailedMergeStatus;
-  const BatchRef(
-    this.iid,
-    this.url,
-    this.state,
-    this.sha, {
-    this.mergeCommitSha,
-    this.sourceBranch,
-    this.targetBranch,
-    this.detailedMergeStatus,
-  });
-}
+@freezed
+class const BatchRef(
+  final int iid,
+  final String url,
+  final String state,
+  final String sha, {
+  final String? mergeCommitSha,
+  final String? sourceBranch,
+  final String? targetBranch,
+  final String? detailedMergeStatus,
+}) with _$BatchRef;
 
 /// A transport failure has an unknown outcome: reconcile before retrying writes.
-class RemoteException implements Exception {
-  final String message;
-  final int? statusCode;
-  const RemoteException(this.message, {this.statusCode});
+class const RemoteException(final String message, {final int? statusCode})
+    implements Exception {
   @override
   String toString() => message;
 }
 
-class AssemblyConflict implements Exception {
-  final int iid;
-  final String detail;
-  const AssemblyConflict(this.iid, this.detail);
+class const AssemblyConflict(final int iid, final String detail)
+    implements Exception {
   @override
   String toString() => 'MR !$iid cannot be applied: $detail';
 }

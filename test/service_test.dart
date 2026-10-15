@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:merge_queue_bot/src/service.dart';
 import 'package:merge_queue_bot/src/store.dart';
 import 'package:test/test.dart';
@@ -27,20 +28,25 @@ Future<void> main(List<String> args) async {
   }
 }
 ''');
+
       final lock = await InstanceLock.acquire(database);
+
       try {
         final blocked = await Process.run(Platform.resolvedExecutable, [
           script.path,
           '$database.lock',
         ]);
+
         expect(blocked.exitCode, 7, reason: '${blocked.stderr}');
       } finally {
         await lock.close();
       }
+
       final acquired = await Process.run(Platform.resolvedExecutable, [
         script.path,
         '$database.lock',
       ]);
+
       expect(acquired.exitCode, 0, reason: '${acquired.stderr}');
     },
   );
@@ -48,8 +54,10 @@ Future<void> main(List<String> args) async {
   test('database cannot be reused for another instance or service account', () {
     final store = Store(':memory:');
     addTearDown(store.close);
+
     store.bindIdentity('https://gitlab.example.com:123');
     store.bindIdentity('https://gitlab.example.com:123');
+
     expect(
       () => store.bindIdentity('https://gitlab.other.com:123'),
       throwsStateError,
@@ -68,6 +76,7 @@ Future<void> main(List<String> args) async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       final url = 'http://${server.address.address}:${server.port}';
       final polled = Completer<void>();
+
       server.listen((request) async {
         final Object response;
         switch (request.uri.path) {
@@ -98,24 +107,30 @@ Future<void> main(List<String> args) async {
             request.response.statusCode = HttpStatus.notFound;
             response = {'message': 'Unexpected request: ${request.uri}'};
         }
+
         request.response.headers.contentType = ContentType.json;
         request.response.write(jsonEncode(response));
         await request.response.close();
+
         if (request.uri.path == '/api/v4/projects/1/merge_requests' &&
             !polled.isCompleted) {
           polled.complete();
         }
       });
+
       Process? process;
       final output = StringBuffer();
       final drains = <Future<void>>[];
       addTearDown(() async {
         process?.kill(ProcessSignal.sigkill);
+
         if (process != null) await process.exitCode;
+
         await Future.wait(drains);
         await server.close(force: true);
         await directory.delete(recursive: true);
       });
+
       final config = File('${directory.path}/config.yaml')
         ..writeAsStringSync('''
 gitlab_url: $url
@@ -127,6 +142,7 @@ projects:
   - id: 1
     target_branches: [main]
 ''');
+
       process = await Process.start(
         Platform.resolvedExecutable,
         ['run', 'bin/merge_queue_bot.dart', '--config', config.path],
@@ -134,6 +150,7 @@ projects:
       );
       drains.add(process.stdout.transform(utf8.decoder).forEach(output.write));
       drains.add(process.stderr.transform(utf8.decoder).forEach(output.write));
+
       await polled.future.timeout(
         const Duration(seconds: 15),
         onTimeout: () => fail('CLI did not reach its first poll: $output'),
@@ -146,6 +163,7 @@ projects:
         onTimeout: () => fail('CLI remained alive after SIGTERM: $output'),
       );
       await Future.wait(drains);
+
       expect(exitCode, 0, reason: '$output');
     },
   );

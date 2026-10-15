@@ -9,23 +9,17 @@ import 'models.dart';
 import 'ports.dart';
 
 /// Builds immutable candidates in private checkouts, one per project and target.
-class GitRepository implements Repository {
-  final String workDirectory;
-  final String token;
-  final BotUser bot;
-  final Uri gitlabUrl;
-  final Duration timeout;
-  final bool allowFileRemotes;
+class GitRepository({
+  required final String workDirectory,
+  required final String token,
+  required final BotUser bot,
+  required final Uri gitlabUrl,
+  final Duration timeout = const Duration(minutes: 5),
+  final bool allowFileRemotes = false,
+}) implements Repository {
   final Map<String, Future<void>> _locks = {};
 
-  GitRepository({
-    required this.workDirectory,
-    required this.token,
-    required this.bot,
-    required this.gitlabUrl,
-    this.timeout = const Duration(minutes: 5),
-    this.allowFileRemotes = false,
-  }) {
+  this {
     if (!['http', 'https'].contains(gitlabUrl.scheme) ||
         gitlabUrl.host.isEmpty ||
         gitlabUrl.userInfo.isNotEmpty) {
@@ -33,6 +27,7 @@ class GitRepository implements Repository {
         'gitlabUrl must be an HTTP(S) URL without credentials.',
       );
     }
+
     if (timeout <= Duration.zero) {
       throw ArgumentError('Git timeout must be positive.');
     }
@@ -52,14 +47,18 @@ class GitRepository implements Repository {
       'rev-parse',
       'refs/merge-queue/base',
     ])).stdout.trim();
+
     if (actualBase != baseSha) {
       throw const RemoteException('Target changed before candidate assembly.');
     }
+
     for (final member in members) {
       _validateSha(member.sha);
+
       if (member.iid <= 0 || member.targetBranch != target) {
         throw ArgumentError('Candidate contains an invalid merge request.');
       }
+
       await _git(directory, [
         'fetch',
         '--quiet',
@@ -72,12 +71,14 @@ class GitRepository implements Repository {
         'rev-parse',
         'refs/merge-queue/sources/${member.iid}',
       ])).stdout.trim();
+
       if (fetched != member.sha) {
         throw RemoteException(
           'MR !${member.iid} changed before candidate assembly.',
         );
       }
     }
+
     await _git(directory, [
       'checkout',
       '--quiet',
@@ -86,6 +87,7 @@ class GitRepository implements Repository {
       baseSha,
     ]);
     await _git(directory, ['clean', '--quiet', '-ffdx']);
+
     for (final member in members) {
       final merge = await _git(directory, [
         'merge',
@@ -93,24 +95,30 @@ class GitRepository implements Repository {
         '--no-commit',
         member.sha,
       ], check: false);
+
       if (merge.exitCode != 0) {
         await _git(directory, ['reset', '--hard', '--quiet', 'HEAD']);
         final details = merge.stderr.trim().isEmpty
             ? merge.stdout
             : merge.stderr;
+
         throw AssemblyConflict(member.iid, _redact(details).trim());
       }
+
       final changes = await _git(directory, [
         'diff',
         '--cached',
         '--quiet',
       ], check: false);
+
       if (changes.exitCode == 0) {
         throw AssemblyConflict(member.iid, 'no changes relative to target');
       }
+
       if (changes.exitCode != 1) {
         throw RemoteException(_failure('diff', changes));
       }
+
       final date = '${timestamp.toUtc().millisecondsSinceEpoch ~/ 1000} +0000';
       final title = member.title
           .replaceAll(
@@ -139,13 +147,16 @@ class GitRepository implements Repository {
         },
       );
     }
+
     final sha = (await _git(directory, ['rev-parse', 'HEAD'])).stdout.trim();
+
     // Keep candidates reachable across crashes, resets, and Git garbage collection.
     await _git(directory, [
       'update-ref',
       'refs/merge-queue/candidates/$sha',
       sha,
     ]);
+
     return sha;
   });
 
@@ -154,6 +165,7 @@ class GitRepository implements Repository {
     final directory = Directory(workDirectory);
     await directory.create(recursive: true);
     await _validateBranch(directory.path, branch);
+
     return _remoteRef(project, 'refs/heads/$branch');
   }
 
@@ -162,7 +174,9 @@ class GitRepository implements Repository {
     if (member.sourceProjectId == project.id) {
       return remoteBranch(project, member.sourceBranch);
     }
+
     if (member.iid <= 0) throw ArgumentError('Invalid merge request number.');
+
     return _remoteRef(project, 'refs/merge-requests/${member.iid}/head');
   }
 
@@ -174,19 +188,25 @@ class GitRepository implements Repository {
       'check-ref-format',
       ref,
     ], check: false);
+
     if (valid.exitCode != 0) throw ArgumentError('Invalid Git ref.');
+
     final output = await _git(directory.path, [
       'ls-remote',
       project.cloneUrl,
       ref,
     ]);
+
     for (final line in const LineSplitter().convert(output.stdout)) {
       final fields = line.split('\t');
+
       if (fields.length == 2 && fields[1] == ref) {
         _validateSha(fields[0]);
+
         return fields[0];
       }
     }
+
     return null;
   }
 
@@ -199,19 +219,25 @@ class GitRepository implements Repository {
     String? expectedRemoteSha,
   ) => _inCheckout(project, target, (directory) async {
     _validateSha(sha);
+
     if (expectedRemoteSha != null) _validateSha(expectedRemoteSha);
+
     await _validateBranch(directory, branch);
+
     if (branch == target) {
       throw ArgumentError('A candidate must not overwrite its target branch.');
     }
+
     final candidate = await _git(directory, [
       'rev-parse',
       '--verify',
       'refs/merge-queue/candidates/$sha',
     ]);
+
     if (candidate.stdout.trim() != sha) {
       throw const RemoteException('Stored candidate does not match its SHA.');
     }
+
     await _git(directory, [
       'push',
       '--porcelain',
@@ -231,16 +257,20 @@ class GitRepository implements Repository {
           '-e',
           '$sha^{commit}',
         ], check: false);
+
         if (exists.exitCode != 0) return false;
+
         final ancestor = await _git(directory, [
           'merge-base',
           '--is-ancestor',
           sha,
           'refs/merge-queue/base',
         ], check: false);
+
         if (ancestor.exitCode > 1) {
           throw RemoteException(_failure('merge-base', ancestor));
         }
+
         return ancestor.exitCode == 0;
       });
 
@@ -256,9 +286,11 @@ class GitRepository implements Repository {
     final completion = Completer<void>();
     _locks[directory] = completion.future;
     await previous;
+
     try {
       await Directory(directory).create(recursive: true);
       await _validateBranch(directory, target);
+
       if (!await Directory(p.join(directory, '.git')).exists()) {
         await _git(directory, [
           'init',
@@ -266,9 +298,11 @@ class GitRepository implements Repository {
           '--initial-branch=merge-queue',
         ]);
       }
+
       return await action(directory);
     } finally {
       completion.complete();
+
       if (identical(_locks[directory], completion.future)) {
         _locks.remove(directory);
       }
@@ -291,7 +325,9 @@ class GitRepository implements Repository {
 
   void _validateRemote(Project project) {
     final remote = Uri.tryParse(project.cloneUrl);
+
     if (allowFileRemotes && remote?.scheme == 'file') return;
+
     if (remote == null ||
         !['http', 'https'].contains(remote.scheme) ||
         remote.origin != gitlabUrl.origin ||
@@ -314,10 +350,12 @@ class GitRepository implements Repository {
     if (branch.isEmpty || branch.startsWith('-')) {
       throw ArgumentError('Invalid Git branch name.');
     }
+
     final result = await _git(directory, [
       'check-ref-format',
       'refs/heads/$branch',
     ], check: false);
+
     if (result.exitCode != 0) throw ArgumentError('Invalid Git branch name.');
   }
 
@@ -362,6 +400,7 @@ class GitRepository implements Repository {
       'LC_ALL': 'C',
       ...environment,
     });
+
     try {
       final process = await Process.start(
         'git',
@@ -387,9 +426,11 @@ class GitRepository implements Repository {
         values[0] as String,
         values[1] as String,
       );
+
       if (check && result.exitCode != 0) {
         throw RemoteException(_failure(arguments.first, result));
       }
+
       return result;
     } on ProcessException catch (error) {
       throw RemoteException('Cannot run Git: ${_redact(error.message)}');
@@ -401,6 +442,7 @@ class GitRepository implements Repository {
 
   String _redact(String text) {
     if (token.isEmpty) return text;
+
     return text
         .replaceAll(token, '[redacted]')
         .replaceAll(Uri.encodeComponent(token), '[redacted]')
@@ -408,9 +450,8 @@ class GitRepository implements Repository {
   }
 }
 
-class _GitResult {
-  final int exitCode;
-  final String stdout;
-  final String stderr;
-  const _GitResult(this.exitCode, this.stdout, this.stderr);
-}
+class const _GitResult(
+  final int exitCode,
+  final String stdout,
+  final String stderr,
+);

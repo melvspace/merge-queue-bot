@@ -7,24 +7,21 @@ import 'models.dart';
 import 'ports.dart';
 
 /// GitLab REST transport. It never follows redirects with the service token.
-class GitLab implements Hosting {
+class GitLab({
+  required Uri url,
+  required String token,
+  http.Client? client,
+  Duration requestTimeout = const Duration(seconds: 30),
+}) implements Hosting {
   static const _batchMarker = '<!-- merge-queue-bot -->';
 
-  final Uri _url;
-  final String _token;
-  final http.Client _client;
-  final Duration _requestTimeout;
+  final Uri _url = url;
+  final String _token = token;
+  final http.Client _client = client ?? http.Client();
+  final Duration _requestTimeout = requestTimeout;
   BotUser? _user;
 
-  GitLab({
-    required Uri url,
-    required String token,
-    http.Client? client,
-    Duration requestTimeout = const Duration(seconds: 30),
-  }) : _url = url,
-       _token = token,
-       _client = client ?? http.Client(),
-       _requestTimeout = requestTimeout {
+  this {
     if (!['https', 'http'].contains(url.scheme) ||
         url.host.isEmpty ||
         url.userInfo.isNotEmpty ||
@@ -32,6 +29,7 @@ class GitLab implements Hosting {
         url.hasFragment) {
       throw ArgumentError('GitLab URL must be an HTTP(S) instance URL.');
     }
+
     if (token.trim().isEmpty || requestTimeout <= Duration.zero) {
       throw ArgumentError('A token and positive request timeout are required.');
     }
@@ -40,7 +38,9 @@ class GitLab implements Hosting {
   @override
   Future<BotUser> currentUser() async {
     final cached = _user;
+
     if (cached != null) return cached;
+
     final user = await _get(['user']);
     final result = BotUser(
       _integer(user['id']),
@@ -48,6 +48,7 @@ class GitLab implements Hosting {
       _email(user, allowPrivate: true),
     );
     _user = result;
+
     return result;
   }
 
@@ -68,6 +69,7 @@ class GitLab implements Hosting {
       ),
     );
     result.validate();
+
     return result;
   }
 
@@ -80,6 +82,7 @@ class GitLab implements Hosting {
       'branches',
       branch,
     ]);
+
     return _string(_object(data['commit'])['id']);
   }
 
@@ -95,6 +98,7 @@ class GitLab implements Hosting {
       'order_by': 'created_at',
       'sort': 'asc',
     });
+
     // Include unassigned MRs so polling can remember previous assignees.
     return data
         .map(_mergeRequest)
@@ -120,16 +124,21 @@ class GitLab implements Hosting {
       'scope': 'all',
     });
     BatchRef? result;
+
     for (final request in requests) {
       if (request['state'] != 'opened' || request['source_branch'] != branch) {
         continue;
       }
+
       await _ownedBatch(request, projectId, branch: branch, target: target);
+
       if (result != null) {
         throw StateError('Multiple open merge requests use the queue branch.');
       }
+
       result = _batchRef(request);
     }
+
     return result;
   }
 
@@ -137,6 +146,7 @@ class GitLab implements Hosting {
   Future<BatchRef> batch(int projectId, int iid) async {
     final data = await _get(_mergeRequestPath(projectId, iid));
     await _ownedBatch(data, projectId);
+
     return _batchRef(data);
   }
 
@@ -148,7 +158,9 @@ class GitLab implements Hosting {
     String description,
   ) async {
     final existing = await findBatch(projectId, branch, target);
+
     if (existing != null) return existing;
+
     final data = await _write('POST', _mergeRequests(projectId), {
       'source_branch': branch,
       'target_branch': target,
@@ -158,12 +170,14 @@ class GitLab implements Hosting {
       'remove_source_branch': false,
     });
     await _ownedBatch(data, projectId, branch: branch, target: target);
+
     return _batchRef(data);
   }
 
   @override
   Future<void> describeBatch(int projectId, int iid, String description) async {
     await batch(projectId, iid);
+
     await _write('PUT', _mergeRequestPath(projectId, iid), {
       'description': _description(description),
       'squash': false,
@@ -179,6 +193,7 @@ class GitLab implements Hosting {
   ) async {
     final request = await _get(_mergeRequestPath(projectId, batchIid));
     await _ownedBatch(request, projectId);
+
     final branch = _string(request['source_branch']);
     final branchPipelines = await _list(
       ['projects', '$projectId', 'pipelines'],
@@ -189,6 +204,7 @@ class GitLab implements Hosting {
       'pipelines',
     ]);
     final result = <int, Pipeline>{};
+
     for (final data in branchPipelines) {
       // The ref check also excludes pipelines for another branch at this SHA.
       if (data['sha'] == sha && data['ref'] == branch) {
@@ -196,6 +212,7 @@ class GitLab implements Hosting {
         result[pipeline.id] = pipeline;
       }
     }
+
     for (final data in mrPipelines) {
       // Merged-results pipelines use synthetic SHAs and are intentionally not
       // eligible: this adapter only observes the exact published candidate.
@@ -204,6 +221,7 @@ class GitLab implements Hosting {
         result[pipeline.id] = pipeline;
       }
     }
+
     return result.values.toList();
   }
 
@@ -215,6 +233,7 @@ class GitLab implements Hosting {
   @override
   Future<void> mergeBatch(int projectId, int iid, String sha) async {
     await batch(projectId, iid);
+
     await _write(
       'PUT',
       [..._mergeRequestPath(projectId, iid), 'merge'],
@@ -237,10 +256,12 @@ class GitLab implements Hosting {
     if (marker.isEmpty || marker.contains('-->')) {
       throw ArgumentError('A stable comment marker is required.');
     }
+
     final token = '<!-- merge-queue-bot:$marker -->';
     final path = [..._mergeRequestPath(projectId, iid), 'notes'];
     final bot = await currentUser();
     final notes = await _list(path);
+
     if (notes.any(
       (note) =>
           _object(note['author'])['id'] == bot.id &&
@@ -248,6 +269,7 @@ class GitLab implements Hosting {
     )) {
       return;
     }
+
     await _write('POST', path, {'body': '${body.trimRight()}\n\n$token'});
   }
 
@@ -282,6 +304,7 @@ class GitLab implements Hosting {
     String? target,
   }) async {
     final bot = await currentUser();
+
     if (_object(data['author'])['id'] != bot.id ||
         !(_nullableString(data['description']) ?? '').contains(_batchMarker) ||
         (data['source_project_id'] != null &&
@@ -304,6 +327,7 @@ class GitLab implements Hosting {
     final author = _object(data['author']);
     final assignees =
         data['assignees'] ?? [if (data['assignee'] != null) data['assignee']];
+
     return MergeRequest(
       iid: _integer(data['iid']),
       title: _string(data['title']),
@@ -313,9 +337,9 @@ class GitLab implements Hosting {
       sourceBranch: _string(data['source_branch']),
       state: _string(data['state']),
       draft: _boolean(data['draft'] ?? data['work_in_progress'] ?? false),
-      assignees: _array(
-        assignees,
-      ).map((value) => _integer(_object(value)['id'])).toList(),
+      assignees: _array(assignees)
+          .map((value) => _integer(_object(value)['id']))
+          .toList(),
       authorName: _name(author),
       authorEmail: _email(author),
       createdAt: _date(data['created_at']),
@@ -345,6 +369,7 @@ class GitLab implements Hosting {
 
   String _name(Json user) {
     final name = _nullableString(user['name']);
+
     return name != null && name.trim().isNotEmpty
         ? name
         : _string(user['username']);
@@ -354,7 +379,9 @@ class GitLab implements Hosting {
     final email = _nullableString(
       (allowPrivate ? user['email'] : null) ?? user['public_email'],
     );
+
     if (email != null && email.trim().isNotEmpty) return email;
+
     return '${_integer(user['id'])}-${_string(user['username'])}'
         '@users.noreply.${_url.host}';
   }
@@ -386,6 +413,7 @@ class GitLab implements Hosting {
 
   Future<Json> _write(String method, List<String> path, Json body) async {
     final response = await _request(method, _uri(path), body);
+
     return response.body.isEmpty
         ? <String, dynamic>{}
         : _object(_decode(response));
@@ -398,29 +426,37 @@ class GitLab implements Hosting {
     var uri = _uri(path, {...query, 'per_page': '100', 'page': '1'});
     final visited = <Uri>{};
     final result = <Json>[];
+
     while (true) {
       if (!visited.add(uri)) {
         throw const RemoteException('GitLab returned a pagination loop.');
       }
+
       final response = await _request('GET', uri);
       final page = _array(_decode(response)).map(_object).toList();
       result.addAll(page);
+
       final next = _nextPage(uri, response, page.length);
+
       if (next == null) return result;
+
       uri = next;
     }
   }
 
   Uri? _nextPage(Uri current, http.Response response, int count) {
     final link = response.headers['link'];
+
     if (link != null) {
       for (final part in link.split(',')) {
         if (!RegExp(r';\s*rel\s*=\s*"?next"?(?:\s*;|\s*$)').hasMatch(part)) {
           continue;
         }
+
         final match = RegExp(r'^\s*<([^>]+)>').firstMatch(part);
         final parsed = match == null ? null : Uri.tryParse(match.group(1)!);
         final next = parsed == null ? null : current.resolveUri(parsed);
+
         if (next == null ||
             next.scheme != current.scheme ||
             next.host != current.host ||
@@ -432,22 +468,31 @@ class GitLab implements Hosting {
             'GitLab returned an unsafe pagination link.',
           );
         }
+
         return next;
       }
     }
+
     final nextPage = response.headers['x-next-page'];
+
     if (nextPage != null) {
       if (nextPage.isEmpty) return null;
+
       final number = int.tryParse(nextPage);
+
       if (number == null || number < 1) {
         throw const RemoteException('GitLab returned invalid pagination.');
       }
+
       return current.replace(
         queryParameters: {...current.queryParameters, 'page': '$number'},
       );
     }
+
     if (link != null || count < 100) return null;
+
     final number = int.parse(current.queryParameters['page'] ?? '1');
+
     return current.replace(
       queryParameters: {...current.queryParameters, 'page': '${number + 1}'},
     );
@@ -458,14 +503,18 @@ class GitLab implements Hosting {
       ..followRedirects = false
       ..headers['PRIVATE-TOKEN'] = _token
       ..headers['Accept'] = 'application/json';
+
     if (body != null) {
       request.headers['Content-Type'] = 'application/json';
       request.body = jsonEncode(body);
     }
+
     final http.Response response;
+
     try {
       response = await (() async {
         final streamed = await _client.send(request);
+
         return http.Response.fromStream(streamed);
       })().timeout(_requestTimeout);
     } on TimeoutException {
@@ -478,12 +527,14 @@ class GitLab implements Hosting {
         'GitLab transport failed; reconcile before retrying.',
       );
     }
+
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw RemoteException(
         'GitLab $method request failed with HTTP ${response.statusCode}.',
         statusCode: response.statusCode,
       );
     }
+
     return response;
   }
 
@@ -497,21 +548,25 @@ class GitLab implements Hosting {
 
   Json _object(Object? value) {
     if (value is Json) return value;
+
     throw const RemoteException('GitLab returned an invalid object.');
   }
 
   List<dynamic> _array(Object? value) {
     if (value is List<dynamic>) return value;
+
     throw const RemoteException('GitLab returned an invalid list.');
   }
 
   int _integer(Object? value) {
     if (value is int) return value;
+
     throw const RemoteException('GitLab returned an invalid integer.');
   }
 
   String _string(Object? value) {
     if (value is String) return value;
+
     throw const RemoteException('GitLab returned an invalid string.');
   }
 
@@ -520,12 +575,15 @@ class GitLab implements Hosting {
 
   bool _boolean(Object? value) {
     if (value is bool) return value;
+
     throw const RemoteException('GitLab returned an invalid boolean.');
   }
 
   DateTime _date(Object? value) {
     final result = DateTime.tryParse(_string(value));
+
     if (result != null) return result;
+
     throw const RemoteException('GitLab returned an invalid timestamp.');
   }
 }

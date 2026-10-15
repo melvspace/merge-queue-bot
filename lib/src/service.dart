@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
+
 import 'package:path/path.dart' as p;
+
 import 'config.dart';
 import 'git_repository.dart';
 import 'gitlab.dart';
@@ -8,15 +10,15 @@ import 'queue.dart';
 import 'store.dart';
 
 /// An OS lock is released on crashes. Never unlink the lock file while running.
-class InstanceLock {
-  final RandomAccessFile _file;
-  InstanceLock._(this._file);
+class InstanceLock._(final RandomAccessFile _file) {
   static Future<InstanceLock> acquire(String database) async {
     final file = File('${p.normalize(p.absolute(database))}.lock');
     await file.parent.create(recursive: true);
     final handle = await file.open(mode: FileMode.append);
+
     try {
       await handle.lock(FileLock.exclusive);
+
       return InstanceLock._(handle);
     } on FileSystemException {
       await handle.close();
@@ -27,17 +29,18 @@ class InstanceLock {
   Future<void> close() => _file.close();
 }
 
-class BotService {
-  final BotConfig config;
-  final String token;
-  final void Function(String) _output;
+class BotService(
+  final BotConfig config,
+  final String token, {
+  void Function(String)? log,
+}) {
+  final void Function(String) _output = log ?? print;
   bool _stopping = false;
   final Set<Completer<void>> _waiters = {};
-  BotService(this.config, this.token, {void Function(String)? log})
-    : _output = log ?? print;
 
   void stop() {
     _stopping = true;
+
     for (final waiter in _waiters) {
       if (!waiter.isCompleted) waiter.complete();
     }
@@ -52,12 +55,14 @@ class BotService {
     final lock = await InstanceLock.acquire(config.database);
     Store? store;
     final hosting = GitLab(url: config.gitlabUrl, token: token);
+
     try {
       store = Store(config.database);
       final user = await hosting.currentUser();
       store.bindIdentity(
         '${config.gitlabUrl.toString().replaceFirst(RegExp(r'/+$'), '')}:${user.id}',
       );
+
       final repository = GitRepository(
         workDirectory: config.workDirectory,
         token: token,
@@ -66,15 +71,18 @@ class BotService {
       );
       final queues = <MergeQueue>[];
       final seen = <String>{};
+
       for (final configured in config.projects) {
         final project = await hosting.project(configured.id);
         project.validate();
+
         for (final target in configured.targets) {
           if (!seen.add('${project.id}:$target')) {
             throw StateError(
               'Duplicate resolved project/target: ${project.path}:$target',
             );
           }
+
           await hosting.branchSha(project.id, target);
           queues.add(
             MergeQueue(
@@ -90,6 +98,7 @@ class BotService {
           );
         }
       }
+
       _log('Started as ${user.name}; managing ${queues.length} queues.');
       await Future.wait(queues.map((queue) => _runQueue(queue, once)));
     } finally {
@@ -107,11 +116,15 @@ class BotService {
         // Persisted intent is reconciled on the next tick. Never auto-retry a
         // mutation in the HTTP transport: its outcome might already be durable.
         _log('[${queue.project.path}:${queue.target}] Tick failed: $error');
+
         if (once) rethrow;
       }
+
       if (once) return;
+
       var delay = config.pollInterval;
       final c = queue.state.candidate;
+
       if (queue.state.paused == null &&
           c?.phase == 'observing' &&
           c?.pipelineIds == null &&
@@ -119,9 +132,12 @@ class BotService {
         final remaining = c!.startedAt!
             .add(config.discoveryWindow)
             .difference(DateTime.now().toUtc());
+
         if (remaining > Duration.zero && remaining < delay) delay = remaining;
+
         if (remaining <= Duration.zero) delay = const Duration(seconds: 1);
       }
+
       if (queue.state.paused == null &&
           c == null &&
           queue.state.groups.isEmpty) {
@@ -130,22 +146,27 @@ class BotService {
           queue.bot.id,
           queue.target,
         );
+
         if (waiting.isNotEmpty) {
           final remaining = waiting.first.enqueuedAt
               .add(config.collectWindow)
               .difference(DateTime.now().toUtc());
+
           if (remaining > Duration.zero && remaining < delay) delay = remaining;
         }
       }
+
       await _wait(delay);
     }
   }
 
   Future<void> _wait(Duration duration) async {
     if (_stopping) return;
+
     final waiter = Completer<void>();
     _waiters.add(waiter);
     final timer = Timer(duration, () => waiter.complete());
+
     try {
       await waiter.future;
     } finally {
