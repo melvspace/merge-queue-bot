@@ -68,8 +68,6 @@ class GitLab({
         data['merge_pipelines_enabled'] ?? false,
       ),
     );
-    result.validate();
-
     return result;
   }
 

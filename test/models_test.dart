@@ -58,4 +58,29 @@ void main() {
       expect(project.copyWith(squashOption: option).validate, returnsNormally);
     }
   });
+
+  test('push landing accepts every supported GitLab merge method', () {
+    for (final method in ['ff', 'merge', 'rebase_merge']) {
+      expect(
+        () => project
+            .copyWith(mergeMethod: method)
+            .validate(landingMode: LandingMode.fastForwardPush),
+        returnsNormally,
+      );
+    }
+  });
+
+  test('push landing still rejects incompatible settings', () {
+    for (final invalid in [
+      project.copyWith(mergeMethod: 'unknown'),
+      project.copyWith(squashOption: 'always'),
+      project.copyWith(automaticRebase: true),
+      project.copyWith(mergedResultsPipelines: true),
+    ]) {
+      expect(
+        () => invalid.validate(landingMode: LandingMode.fastForwardPush),
+        throwsStateError,
+      );
+    }
+  });
 }

@@ -46,5 +46,14 @@ abstract interface class Repository {
     String sha,
     String? expectedRemoteSha,
   );
+
+  /// Push a persisted candidate descending from [baseSha], with an exact lease
+  /// requiring the target to still equal [baseSha]. Never rewrites history.
+  Future<void> fastForward(
+    Project project,
+    String target,
+    String baseSha,
+    String sha,
+  );
   Future<bool> contains(Project project, String target, String sha);
 }

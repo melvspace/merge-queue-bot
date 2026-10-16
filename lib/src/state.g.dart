@@ -12,6 +12,9 @@ Candidate _$CandidateFromJson(Map<String, dynamic> json) => Candidate(
       .map((e) => MergeRequest.fromJson(e as Map<String, dynamic>))
       .toList(),
   createdAt: DateTime.parse(json['createdAt'] as String),
+  landingMode:
+      $enumDecodeNullable(_$LandingModeEnumMap, json['landingMode']) ??
+      LandingMode.merge,
   phase: json['phase'] as String? ?? 'assembling',
   sha: json['sha'] as String?,
   expectedRemoteSha: json['expectedRemoteSha'] as String?,
@@ -33,6 +36,7 @@ Map<String, dynamic> _$CandidateToJson(Candidate instance) => <String, dynamic>{
   'baseSha': instance.baseSha,
   'members': instance.members.map((e) => e.toJson()).toList(),
   'createdAt': instance.createdAt.toIso8601String(),
+  'landingMode': _$LandingModeEnumMap[instance.landingMode]!,
   'phase': instance.phase,
   'sha': instance.sha,
   'expectedRemoteSha': instance.expectedRemoteSha,
@@ -40,6 +44,11 @@ Map<String, dynamic> _$CandidateToJson(Candidate instance) => <String, dynamic>{
   'pipelineIds': instance.pipelineIds,
   'finalized': instance.finalized,
   'closing': instance.closing,
+};
+
+const _$LandingModeEnumMap = {
+  LandingMode.merge: 'merge',
+  LandingMode.fastForwardPush: 'fast_forward_push',
 };
 
 Rejection _$RejectionFromJson(Map<String, dynamic> json) => Rejection(

@@ -12,6 +12,255 @@ void main() {
   setUp(() => fixture = _Fixture());
   tearDown(() => fixture.store.close());
 
+  group('fast-forward push landing', () {
+    setUp(() {
+      fixture = _Fixture.replace(
+        fixture,
+        landingMode: LandingMode.fastForwardPush,
+      );
+      fixture.hosting.settings = testProject.copyWith(
+        mergeMethod: 'rebase_merge',
+      );
+    });
+
+    test(
+      'lands the tested SHA and retires the batch without the merge API',
+      () async {
+        await fixture.publish([member(1), member(2)]);
+
+        final sha = fixture.sha;
+        final batch = fixture.queue.state.batchIid!;
+        fixture.hosting.pipelineData[1] = Pipeline(1, sha, 'running');
+        fixture.advance(10);
+
+        await fixture.tick();
+
+        expect(fixture.repository.fastForwards, isEmpty);
+
+        fixture.hosting.pipelineData[1] = Pipeline(1, sha, 'success');
+
+        await fixture.tick();
+
+        expect(fixture.repository.fastForwards.single.sha, sha);
+        expect(fixture.repository.fastForwards.single.lease, 'base-0');
+        expect(fixture.hosting.branches['main'], sha);
+        expect(fixture.hosting.mergeAttempts, isEmpty);
+        expect(fixture.hosting.closedMembers, [1, 2]);
+        expect(fixture.hosting.closedBatches, [batch]);
+        expect(fixture.queue.state.candidate, isNull);
+
+        fixture.hosting.members[3] = member(3);
+
+        await fixture.tick();
+
+        expect(fixture.queue.state.batchIid, isNot(batch));
+        expect(fixture.hosting.batches[batch]!.sha, sha);
+      },
+    );
+
+    for (final status in [
+      null,
+      'unchecked',
+      'checking',
+      'preparing',
+      'ci_still_running',
+    ]) {
+      test('requires explicit mergeability after $status', () async {
+        await fixture.publish([member(1)]);
+
+        final iid = fixture.queue.state.batchIid!;
+        fixture.hosting.setBatchStatus(iid, status);
+        fixture.advance(10);
+
+        await fixture.tick();
+
+        expect(fixture.repository.fastForwards, isEmpty);
+        expect(fixture.queue.state.candidate!.phase, 'observing');
+
+        fixture.hosting.setBatchStatus(iid, 'mergeable');
+
+        await fixture.tick();
+
+        expect(fixture.repository.fastForwards, hasLength(1));
+      });
+    }
+
+    for (final status in [
+      'not_approved',
+      'discussions_not_resolved',
+      'ci_must_pass',
+      'status_checks_must_pass',
+      'unknown',
+    ]) {
+      test('does not push when GitLab reports $status', () async {
+        await fixture.publish([member(1)]);
+
+        fixture.hosting.setBatchStatus(fixture.queue.state.batchIid!, status);
+        fixture.advance(10);
+
+        await fixture.tick();
+
+        expect(fixture.repository.fastForwards, isEmpty);
+        expect(fixture.queue.state.paused, contains(status));
+        expect(fixture.hosting.closedMembers, isEmpty);
+      });
+    }
+
+    test('rebuilds after losing the target lease at push time', () async {
+      await fixture.publish([member(1)]);
+
+      fixture.repository.beforeFastForward = () async {
+        fixture.hosting.branches['main'] = 'base-1';
+      };
+      fixture.advance(10);
+
+      await fixture.tick();
+
+      expect(fixture.repository.fastForwards, isEmpty);
+      expect(fixture.hosting.branches['main'], 'base-1');
+      expect(fixture.queue.state.candidate, isNull);
+      expect(fixture.hosting.closedMembers, isEmpty);
+
+      await fixture.tick();
+
+      expect(fixture.repository.assemblies.last.base, 'base-1');
+    });
+
+    test('reconciles a lost push response with an opened batch MR', () async {
+      await fixture.publish([member(1)]);
+
+      fixture.repository.failFastForwardAfterPush = true;
+      fixture.advance(10);
+
+      await fixture.tick();
+      fixture.restart();
+
+      await fixture.tick();
+
+      expect(fixture.repository.fastForwards, hasLength(1));
+      expect(fixture.hosting.closedMembers, [1]);
+      expect(fixture.queue.state.candidate, isNull);
+    });
+
+    test('accepts GitLab marking a pushed batch merged', () async {
+      await fixture.publish([member(1)]);
+
+      final sha = fixture.sha;
+      final iid = fixture.queue.state.batchIid!;
+      fixture.repository.afterFastForward = () async {
+        fixture.hosting.batches[iid] = fixture.hosting.batches[iid]!.copyWith(
+          state: 'merged',
+          mergeCommitSha: sha,
+        );
+      };
+      fixture.advance(10);
+
+      await fixture.tick();
+
+      expect(fixture.repository.fastForwards, hasLength(1));
+      expect(fixture.hosting.closedBatches, isEmpty);
+      expect(fixture.hosting.closedMembers, [1]);
+      expect(fixture.queue.state.candidate, isNull);
+      expect(fixture.queue.state.paused, isNull);
+    });
+
+    test('recovers after a crash, target advance, and source update', () async {
+      await fixture.publish([member(1)]);
+
+      final sha = fixture.sha;
+      fixture.repository.afterFastForward = () async {
+        throw StateError('Process stopped after target push');
+      };
+      fixture.advance(10);
+
+      await expectLater(fixture.tick(), throwsStateError);
+
+      expect(fixture.queue.state.candidate!.phase, 'merging');
+
+      fixture.hosting.branches['main'] = 'subsequent-commit';
+      fixture.hosting.members[1] = member(1, sha: 'new-source');
+      fixture.landingMode = LandingMode.merge;
+      fixture.restart();
+
+      await fixture.tick();
+
+      expect(fixture.hosting.landedShas, contains(sha));
+      expect(fixture.repository.fastForwards, hasLength(1));
+      expect(fixture.hosting.members[1]!.state, 'opened');
+      expect(fixture.hosting.members[1]!.assignees, isEmpty);
+      expect(fixture.queue.state.candidate, isNull);
+      expect(fixture.repository.assemblies, hasLength(1));
+    });
+
+    test('recovers when a batch close response is lost', () async {
+      await fixture.publish([member(1)]);
+
+      final batch = fixture.queue.state.batchIid!;
+      fixture.hosting.afterClose = (iid) async {
+        if (iid == batch) throw const RemoteException('Close response lost');
+      };
+      fixture.advance(10);
+
+      await expectLater(fixture.tick(), throwsA(isA<RemoteException>()));
+
+      expect(fixture.queue.state.candidate!.phase, 'finalizing');
+      expect(fixture.hosting.batches[batch]!.state, 'closed');
+
+      fixture.hosting.afterClose = null;
+      fixture.restart();
+
+      await fixture.tick();
+
+      expect(fixture.queue.state.candidate, isNull);
+      expect(fixture.hosting.closedMembers, [1]);
+      expect(fixture.hosting.closedBatches, [batch]);
+      expect(fixture.repository.fastForwards, hasLength(1));
+    });
+
+    test(
+      'pauses a rejected push and retains intent for reconciliation',
+      () async {
+        await fixture.publish([member(1)]);
+
+        fixture.repository.failFastForward = const RemoteException(
+          'Protected branch rejected',
+        );
+        fixture.advance(10);
+
+        await fixture.tick();
+        await fixture.tick();
+
+        expect(
+          fixture.queue.state.paused,
+          contains('Protected branch rejected'),
+        );
+        expect(fixture.queue.state.candidate!.phase, 'merging');
+        expect(fixture.hosting.closedMembers, isEmpty);
+        expect(fixture.repository.fastForwards, isEmpty);
+      },
+    );
+
+    test(
+      'rebuilds an unlanded candidate when the configured mode changes',
+      () async {
+        await fixture.publish([member(1)]);
+
+        fixture.landingMode = LandingMode.merge;
+        fixture.hosting.settings = testProject;
+        fixture.restart();
+
+        await fixture.tick();
+
+        expect(fixture.queue.state.candidate, isNull);
+
+        await fixture.tick();
+
+        expect(fixture.queue.state.candidate!.landingMode, LandingMode.merge);
+        expect(fixture.repository.fastForwards, isEmpty);
+      },
+    );
+  });
+
   test(
     'collects FIFO eligible originals, caps batches, and freezes membership',
     () async {
@@ -1149,6 +1398,7 @@ class _Fixture({
   final Duration collect = Duration.zero,
   final Duration discovery = const Duration(seconds: 10),
   final int maxBatch = 10,
+  var LandingMode landingMode = LandingMode.merge,
 }) {
   final Store store = Store(':memory:');
   final FakeHosting hosting = FakeHosting();
@@ -1165,6 +1415,7 @@ class _Fixture({
     Duration? collect,
     Duration? discovery,
     int? maxBatch,
+    LandingMode? landingMode,
   }) {
     old.store.close();
 
@@ -1172,6 +1423,7 @@ class _Fixture({
       collect: collect ?? old.collect,
       discovery: discovery ?? old.discovery,
       maxBatch: maxBatch ?? old.maxBatch,
+      landingMode: landingMode ?? old.landingMode,
     );
   }
 
@@ -1181,13 +1433,16 @@ class _Fixture({
       repository: repository,
       store: store,
       config: BotConfig(
-        gitlabUrl: Uri.parse('https://gitlab.example.test'),
-        database: ':memory:',
-        workDirectory: '/tmp/codex/queue-test',
-        collectWindow: collect,
-        discoveryWindow: discovery,
-        pipelineTimeout: const Duration(seconds: 60),
-        maxBatchSize: maxBatch,
+        gitlab: GitLabConfig(url: Uri.parse('https://gitlab.example.test')),
+        storage: const StorageConfig(
+          database: ':memory:',
+          workDirectory: '/tmp/codex/queue-test',
+        ),
+        queue: QueueConfig(collectWindow: collect, maxBatchSize: maxBatch),
+        pipelines: PipelineConfig(
+          discoveryWindow: discovery,
+          timeout: const Duration(seconds: 60),
+        ),
         projects: const [
           ProjectConfig('1', ['main']),
         ],
@@ -1195,6 +1450,7 @@ class _Fixture({
       project: testProject,
       target: 'main',
       bot: testBot,
+      landingMode: landingMode,
       clock: () => now,
       log: (_) {},
     );

@@ -52,29 +52,29 @@ class BotService(
   );
 
   Future<void> run({bool once = false}) async {
-    final lock = await InstanceLock.acquire(config.database);
+    final lock = await InstanceLock.acquire(config.storage.database);
     Store? store;
-    final hosting = GitLab(url: config.gitlabUrl, token: token);
+    final hosting = GitLab(url: config.gitlab.url, token: token);
 
     try {
-      store = Store(config.database);
+      store = Store(config.storage.database);
       final user = await hosting.currentUser();
       store.bindIdentity(
-        '${config.gitlabUrl.toString().replaceFirst(RegExp(r'/+$'), '')}:${user.id}',
+        '${config.gitlab.url.toString().replaceFirst(RegExp(r'/+$'), '')}:${user.id}',
       );
 
       final repository = GitRepository(
-        workDirectory: config.workDirectory,
+        workDirectory: config.storage.workDirectory,
         token: token,
         bot: user,
-        gitlabUrl: config.gitlabUrl,
+        gitlabUrl: config.gitlab.url,
       );
       final queues = <MergeQueue>[];
       final seen = <String>{};
 
       for (final configured in config.projects) {
         final project = await hosting.project(configured.id);
-        project.validate();
+        project.validate(landingMode: configured.landingMode);
 
         for (final target in configured.targets) {
           if (!seen.add('${project.id}:$target')) {
@@ -93,6 +93,7 @@ class BotService(
               project: project,
               target: target,
               bot: user,
+              landingMode: configured.landingMode,
               log: _log,
             ),
           );
@@ -122,7 +123,7 @@ class BotService(
 
       if (once) return;
 
-      var delay = config.pollInterval;
+      var delay = config.queue.pollInterval;
       final c = queue.state.candidate;
 
       if (queue.state.paused == null &&
@@ -130,7 +131,7 @@ class BotService(
           c?.pipelineIds == null &&
           c?.startedAt != null) {
         final remaining = c!.startedAt!
-            .add(config.discoveryWindow)
+            .add(config.pipelines.discoveryWindow)
             .difference(DateTime.now().toUtc());
 
         if (remaining > Duration.zero && remaining < delay) delay = remaining;
@@ -149,7 +150,7 @@ class BotService(
 
         if (waiting.isNotEmpty) {
           final remaining = waiting.first.enqueuedAt
-              .add(config.collectWindow)
+              .add(config.queue.collectWindow)
               .difference(DateTime.now().toUtc());
 
           if (remaining > Duration.zero && remaining < delay) delay = remaining;

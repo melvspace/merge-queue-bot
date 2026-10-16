@@ -248,6 +248,54 @@ class GitRepository({
   });
 
   @override
+  Future<void> fastForward(
+    Project project,
+    String target,
+    String baseSha,
+    String sha,
+  ) => _inCheckout(project, target, (directory) async {
+    _validateSha(baseSha);
+    _validateSha(sha);
+    final candidate = await _git(directory, [
+      'rev-parse',
+      '--verify',
+      'refs/merge-queue/candidates/$sha',
+    ]);
+
+    if (candidate.stdout.trim() != sha) {
+      throw const RemoteException('Stored candidate does not match its SHA.');
+    }
+
+    final ancestor = await _git(directory, [
+      'merge-base',
+      '--is-ancestor',
+      baseSha,
+      sha,
+    ], check: false);
+
+    if (ancestor.exitCode == 1) {
+      throw const RemoteException('Candidate does not descend from its base.');
+    }
+
+    if (ancestor.exitCode != 0) {
+      throw RemoteException(_failure('merge-base', ancestor));
+    }
+
+    // Git skips the lease check for an already up-to-date destination.
+    if (await _remoteRef(project, 'refs/heads/$target') != baseSha) {
+      throw const RemoteException('Target changed before fast-forward push.');
+    }
+
+    await _git(directory, [
+      'push',
+      '--porcelain',
+      '--force-with-lease=refs/heads/$target:$baseSha',
+      project.cloneUrl,
+      '$sha:refs/heads/$target',
+    ]);
+  });
+
+  @override
   Future<bool> contains(Project project, String target, String sha) =>
       _inCheckout(project, target, (directory) async {
         _validateSha(sha);

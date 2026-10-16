@@ -1,13 +1,24 @@
-gitlab_url: https://gitlab.example.com
-token_env: GITLAB_TOKEN
-# token_file: /run/secrets/gitlab_token
-database: data/queue.sqlite
-work_directory: data/repositories
-poll_interval_seconds: 30
-collect_window_seconds: 30
-max_batch_size: 10
-pipeline_discovery_seconds: 10
-pipeline_timeout_seconds: 3600
+gitlab:
+  url: https://gitlab.example.com
+  token_env: GITLAB_TOKEN
+  # token_file: /run/secrets/gitlab_token
+
+storage:
+  database: data/queue.sqlite
+  work_directory: data/repositories
+
+queue:
+  poll_interval_seconds: 30
+  collect_window_seconds: 30
+  max_batch_size: 10
+
+pipelines:
+  discovery_seconds: 10
+  timeout_seconds: 3600
+
 projects:
   - id: group/project
     target_branches: [main]
+    # Push the tested commit directly; allows other repository merge strategies.
+    landing_mode: fast_forward_push
+    # Default: merge, which requires the repository's merge method to be ff.

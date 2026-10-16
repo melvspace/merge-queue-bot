@@ -9,9 +9,9 @@ Merge several GitLab merge requests together after testing their combined change
 3. It waits for pipelines, then fast-forwards the successful batch into the target branch.
 4. Original MRs are closed with a link to the merged batch. Their source branches are kept.
 
-**No pipeline means merge without CI.** By default, the bot waits 10 seconds after publishing the batch to discover pipelines. It waits for every discovered pipeline to succeed; pipelines appearing later are ignored. Change this window with `pipeline_discovery_seconds`.
+**No pipeline means merge without CI.** By default, the bot waits 10 seconds after publishing the batch to discover pipelines. It waits for every discovered pipeline to succeed; pipelines appearing later are ignored by this discovery process. Change this window with `pipelines.discovery_seconds`. GitLab's mergeability checks can still block landing because of newer pipelines.
 
-Changes to the target branch or an included MR cause the batch to be rebuilt. The bot does not check approvals; GitLab's own merge rules still apply.
+Changes to the target branch or an included MR cause the batch to be rebuilt. Merge rules apply to the batch MR; the bot does not check approvals on the original MRs.
 
 ## Get started
 
@@ -21,25 +21,31 @@ You need **Docker** and a GitLab service account token with `api` and `write_rep
 
 For each managed project:
 
-- Choose **Fast-forward merge** and make squashing optional or disabled.
+- Choose a landing mode for the project: `merge` (default) uses GitLab's merge API and requires **Fast-forward merge**; `fast_forward_push` lets the project keep any merge method and requires the bot to push to protected target branches.
+- Make squashing optional or disabled.
 - Disable **automatic rebase** and **merged-results pipelines**.
 - Protect target branches and disable force-pushes to them.
 - Allow the bot to create and force-push `merge-queue/*` branches.
 - Configure CI to run on branch pushes or MR creation. The bot never triggers pipelines itself.
 
-GitLab can still block a batch because of approvals, unresolved discussions, or other merge rules. If pipelines are mandatory, GitLab will refuse a batch with no pipeline.
+GitLab can still block a batch because of approvals, unresolved discussions, or other merge rules. If pipelines are mandatory, a batch with no pipeline cannot land.
+
+With `fast_forward_push`, the bot waits for the batch MR's `detailed_merge_status` to be `mergeable`, then pushes the exact tested candidate only if the target still matches its recorded base. The bot verifies ancestry before pushing, so target history is never rewritten. Release and branch-sync MRs merged outside the bot continue to use the project's merge method. There is a small interval between checking mergeability and pushing during which MR rules could change; the push cannot atomically enforce those rules. If GitLab leaves the landed batch MR open, the bot comments and closes it.
 
 ### 2. Configure and run
 
 Create `config.yaml`:
 
 ```yaml
-gitlab_url: https://gitlab.example.com
-database: /data/queue.sqlite
-work_directory: /data/repositories
+gitlab:
+  url: https://gitlab.example.com
+storage:
+  database: /data/queue.sqlite
+  work_directory: /data/repositories
 projects:
   - id: group/project
     target_branches: [main]
+    landing_mode: fast_forward_push
 ```
 
 Replace the URL, project, and target branch with yours. Create `.env` containing your token:
@@ -63,7 +69,7 @@ docker run -d --name merge-queue-bot --restart unless-stopped \
 
 View logs with `docker logs -f merge-queue-bot`. The volume preserves queue state across restarts; run only one instance for each managed queue. When using a bind mount for `/data`, give container UID **10001** write access.
 
-See [config.example.yaml](config.example.yaml) for all settings. Defaults: poll every **30 seconds**, collect for **30 seconds**, batch up to **10 MRs**, and time out after **60 minutes**.
+See [config.example.yaml](config.example.yaml) for all settings, grouped under `gitlab`, `storage`, `queue`, and `pipelines`. `gitlab.url` and `projects` are required; other sections use defaults. Flat configuration keys are no longer accepted. Defaults: poll every **30 seconds**, collect for **30 seconds**, batch up to **10 MRs**, and time out after **60 minutes**.
 
 ## When something fails
 

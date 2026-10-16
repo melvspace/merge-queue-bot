@@ -46,6 +46,7 @@ class FakeHosting implements Hosting {
   final Set<String> landedShas = {};
   final Map<String, String> comments = {};
   final List<int> closedMembers = [];
+  final List<int> closedBatches = [];
   final List<int> reopenedMembers = [];
   final List<int> pipelineReads = [];
   final List<String> discoveredShas = [];
@@ -218,8 +219,14 @@ class FakeHosting implements Hosting {
 
   @override
   Future<void> closeMergeRequest(int projectId, int iid) async {
-    closedMembers.add(iid);
-    members[iid] = members[iid]!.copyWith(state: 'closed');
+    if (batches.containsKey(iid)) {
+      closedBatches.add(iid);
+      batches[iid] = batches[iid]!.copyWith(state: 'closed');
+    } else {
+      closedMembers.add(iid);
+      members[iid] = members[iid]!.copyWith(state: 'closed');
+    }
+
     await afterClose?.call(iid);
   }
 
@@ -270,6 +277,11 @@ class FakeRepository(final FakeHosting hosting) implements Repository {
   final Set<int> conflicts = {};
   final Map<int, String?> sourceShas = {};
   bool failPublishAfterPush = false;
+  bool failFastForwardAfterPush = false;
+  RemoteException? failFastForward;
+  Future<void> Function()? beforeFastForward;
+  Future<void> Function()? afterFastForward;
+  final List<Publication> fastForwards = [];
 
   @override
   Future<String> assemble(
@@ -322,6 +334,33 @@ class FakeRepository(final FakeHosting hosting) implements Repository {
     if (failPublishAfterPush) {
       failPublishAfterPush = false;
       throw const RemoteException('Push response lost');
+    }
+  }
+
+  @override
+  Future<void> fastForward(
+    Project project,
+    String target,
+    String baseSha,
+    String sha,
+  ) async {
+    await beforeFastForward?.call();
+
+    if (failFastForward case final error?) throw error;
+
+    if (hosting.branches[target] != baseSha ||
+        !assemblies.any((a) => a.base == baseSha && a.sha == sha)) {
+      throw const RemoteException('Target lease or ancestry changed');
+    }
+
+    fastForwards.add(Publication(target, sha, baseSha));
+    hosting.branches[target] = sha;
+    hosting.landedShas.add(sha);
+    await afterFastForward?.call();
+
+    if (failFastForwardAfterPush) {
+      failFastForwardAfterPush = false;
+      throw const RemoteException('Fast-forward push response lost');
     }
   }
 

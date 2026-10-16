@@ -5,6 +5,13 @@ part 'models.g.dart';
 
 typedef Json = Map<String, dynamic>;
 
+enum LandingMode {
+  @JsonValue('merge')
+  merge,
+  @JsonValue('fast_forward_push')
+  fastForwardPush,
+}
+
 @freezed
 class const BotUser(final int id, final String name, final String email)
     with _$BotUser;
@@ -19,11 +26,13 @@ class const Project({
   required final bool automaticRebase,
   final bool mergedResultsPipelines = false,
 }) with _$Project {
-  void validate() {
+  void validate({LandingMode landingMode = LandingMode.merge}) {
     final problems = <String>[];
 
-    if (mergeMethod != 'ff') {
+    if (landingMode == LandingMode.merge && mergeMethod != 'ff') {
       problems.add('merge_method="$mergeMethod"; expected "ff" (fast-forward)');
+    } else if (!{'ff', 'merge', 'rebase_merge'}.contains(mergeMethod)) {
+      problems.add('merge_method="$mergeMethod"; unsupported merge method');
     }
 
     if (!const {'never', 'default_off', 'default_on'}.contains(squashOption)) {

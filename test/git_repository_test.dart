@@ -450,6 +450,189 @@ void main() {
   });
 
   test(
+    'fast-forwards the target to the persisted candidate after recovery',
+    () async {
+      final first = await fixture.mr(1, [
+        {'one.txt': 'one\n'},
+      ]);
+      final second = await fixture.mr(2, [
+        {'two.txt': 'two\n'},
+      ]);
+      final sha = await fixture.repository().assemble(
+        fixture.project,
+        'main',
+        fixture.base,
+        [first, second],
+        fixture.timestamp,
+      );
+      final recovered = fixture.repository();
+
+      await recovered.fastForward(fixture.project, 'main', fixture.base, sha);
+      await fixture.git(['fetch', '--quiet', 'origin', 'main']);
+
+      expect(await recovered.remoteBranch(fixture.project, 'main'), sha);
+      expect(await recovered.contains(fixture.project, 'main', sha), isTrue);
+      expect(
+        await fixture.git(['rev-list', '--count', '${fixture.base}..$sha']),
+        '2',
+      );
+      expect(
+        await fixture.git(['rev-list', '--merges', '${fixture.base}..$sha']),
+        isEmpty,
+      );
+      expect(await fixture.git(['show', '$sha:one.txt']), 'one');
+      expect(await fixture.git(['show', '$sha:two.txt']), 'two');
+      expect(
+        await recovered.remoteBranch(fixture.project, first.sourceBranch),
+        first.sha,
+      );
+      expect(
+        await recovered.remoteBranch(fixture.project, second.sourceBranch),
+        second.sha,
+      );
+
+      // An up-to-date push must not disguise a stale expected target SHA.
+      await expectLater(
+        recovered.fastForward(fixture.project, 'main', fixture.base, sha),
+        throwsA(isA<RemoteException>()),
+      );
+      expect(await recovered.remoteBranch(fixture.project, 'main'), sha);
+    },
+  );
+
+  test(
+    'rejects a changed target even when it is an ancestor of the candidate',
+    () async {
+      final first = await fixture.mr(1, [
+        {'one.txt': 'one\n'},
+      ]);
+      final second = await fixture.mr(2, [
+        {'two.txt': 'two\n'},
+      ]);
+      final repository = fixture.repository();
+      final sha = await repository.assemble(
+        fixture.project,
+        'main',
+        fixture.base,
+        [first, second],
+        fixture.timestamp,
+      );
+      await repository.publish(
+        fixture.project,
+        'main',
+        'merge-queue/main',
+        sha,
+        null,
+      );
+      await fixture.git([
+        'fetch',
+        '--quiet',
+        'origin',
+        'refs/heads/merge-queue/main',
+      ]);
+      final updatedBase = await fixture.git(['rev-parse', '$sha~']);
+      await fixture.git([
+        'push',
+        '--quiet',
+        'origin',
+        '$updatedBase:refs/heads/main',
+      ]);
+
+      await expectLater(
+        repository.fastForward(fixture.project, 'main', fixture.base, sha),
+        throwsA(isA<RemoteException>()),
+      );
+      expect(
+        await repository.remoteBranch(fixture.project, 'main'),
+        updatedBase,
+      );
+    },
+  );
+
+  test('does not recreate a missing target branch', () async {
+    final member = await fixture.mr(1, [
+      {'one.txt': 'one\n'},
+    ]);
+    final repository = fixture.repository();
+    final sha = await repository.assemble(
+      fixture.project,
+      'main',
+      fixture.base,
+      [member],
+      fixture.timestamp,
+    );
+    await fixture.git(['push', '--quiet', 'origin', ':refs/heads/main']);
+
+    await expectLater(
+      repository.fastForward(fixture.project, 'main', fixture.base, sha),
+      throwsA(isA<RemoteException>()),
+    );
+    expect(await repository.remoteBranch(fixture.project, 'main'), isNull);
+  });
+
+  test(
+    'rejects a candidate that does not descend from the expected base',
+    () async {
+      final member = await fixture.mr(1, [
+        {'one.txt': 'one\n'},
+      ]);
+      final repository = fixture.repository();
+      final sha = await repository.assemble(
+        fixture.project,
+        'main',
+        fixture.base,
+        [member],
+        fixture.timestamp,
+      );
+      await fixture.git([
+        'push',
+        '--quiet',
+        'origin',
+        '${member.sha}:refs/heads/main',
+      ]);
+
+      await expectLater(
+        repository.fastForward(fixture.project, 'main', member.sha, sha),
+        throwsA(
+          isA<RemoteException>().having(
+            (error) => error.message,
+            'message',
+            contains('does not descend'),
+          ),
+        ),
+      );
+      expect(
+        await repository.remoteBranch(fixture.project, 'main'),
+        member.sha,
+      );
+    },
+  );
+
+  test('rejects a candidate persisted for another target', () async {
+    await fixture.git(['push', '--quiet', 'origin', 'main:refs/heads/release']);
+    final member = await fixture.mr(1, [
+      {'one.txt': 'one\n'},
+    ]);
+    final repository = fixture.repository();
+    final sha = await repository.assemble(
+      fixture.project,
+      'main',
+      fixture.base,
+      [member],
+      fixture.timestamp,
+    );
+
+    await expectLater(
+      repository.fastForward(fixture.project, 'release', fixture.base, sha),
+      throwsA(isA<RemoteException>()),
+    );
+    expect(
+      await repository.remoteBranch(fixture.project, 'release'),
+      fixture.base,
+    );
+  });
+
+  test(
     'isolates concurrent target checkouts and their candidate references',
     () async {
       await fixture.git([
@@ -527,6 +710,15 @@ void main() {
           repository.remoteBranch(fixture.withUrl(url), 'main'),
           throwsArgumentError,
         );
+        await expectLater(
+          repository.fastForward(
+            fixture.withUrl(url),
+            'main',
+            fixture.base,
+            fixture.base,
+          ),
+          throwsArgumentError,
+        );
       }
 
       await expectLater(
@@ -537,6 +729,39 @@ void main() {
         repository.remoteBranch(fixture.project, '-main'),
         throwsArgumentError,
       );
+
+      for (final branch in ['../main', '-main']) {
+        await expectLater(
+          repository.fastForward(
+            fixture.project,
+            branch,
+            fixture.base,
+            fixture.base,
+          ),
+          throwsArgumentError,
+        );
+      }
+
+      for (final invalidSha in ['--all', '${fixture.base}^{commit}']) {
+        await expectLater(
+          repository.fastForward(
+            fixture.project,
+            'main',
+            invalidSha,
+            fixture.base,
+          ),
+          throwsArgumentError,
+        );
+        await expectLater(
+          repository.fastForward(
+            fixture.project,
+            'main',
+            fixture.base,
+            invalidSha,
+          ),
+          throwsArgumentError,
+        );
+      }
     },
   );
 

@@ -92,7 +92,7 @@ Future<void> main(List<String> args) async {
               'id': 1,
               'path_with_namespace': 'test/project',
               'http_url_to_repo': '$url/test/project.git',
-              'merge_method': 'ff',
+              'merge_method': 'rebase_merge',
               'squash_option': 'never',
               'automatic_rebase_enabled': false,
               'merge_pipelines_enabled': false,
@@ -133,14 +133,18 @@ Future<void> main(List<String> args) async {
 
       final config = File('${directory.path}/config.yaml')
         ..writeAsStringSync('''
-gitlab_url: $url
-token_env: MERGE_QUEUE_SHUTDOWN_TEST_TOKEN
-database: ${directory.path}/queue.sqlite
-work_directory: ${directory.path}/repositories
-poll_interval_seconds: 60
+gitlab:
+  url: $url
+  token_env: MERGE_QUEUE_SHUTDOWN_TEST_TOKEN
+storage:
+  database: ${directory.path}/queue.sqlite
+  work_directory: ${directory.path}/repositories
+queue:
+  poll_interval_seconds: 60
 projects:
   - id: 1
     target_branches: [main]
+    landing_mode: fast_forward_push
 ''');
 
       process = await Process.start(

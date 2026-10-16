@@ -89,6 +89,20 @@ void main() {
     expect(candidate.toJson(), {...legacy, 'closing': <int>[]});
   });
 
+  test(
+    'legacy candidates default to API landing and push mode survives restart',
+    () {
+      final legacy = candidateSnapshot()..remove('landingMode');
+
+      expect(Candidate.fromJson(legacy).landingMode, LandingMode.merge);
+
+      final push = candidateSnapshot()..['landingMode'] = 'fast_forward_push';
+
+      expect(Candidate.fromJson(push).landingMode, LandingMode.fastForwardPush);
+      expect(Candidate.fromJson(push).toJson(), push);
+    },
+  );
+
   test('preserves rejection assignees and defaults legacy delivery intent', () {
     final snapshot = rejectionSnapshot();
     final rejection = Rejection.fromJson(snapshot);
@@ -253,6 +267,7 @@ Json memberSnapshot() => {
 };
 
 Json candidateSnapshot() => {
+  'landingMode': 'merge',
   'baseSha': 'base-sha',
   'members': [memberSnapshot()],
   'createdAt': '2026-10-15T12:00:00.000Z',

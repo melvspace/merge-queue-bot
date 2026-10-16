@@ -10,6 +10,7 @@ class Candidate({
   required final String baseSha,
   required final List<MergeRequest> members,
   required final DateTime createdAt,
+  final LandingMode landingMode = LandingMode.merge,
   var String phase = 'assembling',
   var String? sha,
   var String? expectedRemoteSha,

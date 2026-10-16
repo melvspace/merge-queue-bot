@@ -157,7 +157,7 @@ void main() {
         final api = _gitlab((request) => _json(_project(settings)));
         addTearDown(api.close);
 
-        await expectLater(api.project('1'), throwsStateError);
+        expect((await api.project('1')).validate, throwsStateError);
       });
     }
 

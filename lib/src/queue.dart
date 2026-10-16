@@ -17,6 +17,7 @@ class MergeQueue({
   required final Project project,
   required final String target,
   required final BotUser bot,
+  final LandingMode landingMode = LandingMode.merge,
   DateTime Function()? clock,
   void Function(String)? log,
 }) {
@@ -77,6 +78,14 @@ class MergeQueue({
     store.observe(state.key, items, bot.id, clock().toUtc());
 
     final candidate = state.candidate;
+
+    if (candidate != null && candidate.landingMode != landingMode) {
+      _log('Landing mode changed; rebuilding the unlanded candidate.');
+      state.candidate = null;
+      _save();
+
+      return;
+    }
 
     if (candidate != null && !await _unchanged(candidate)) {
       _log('Candidate invalidated by base or source changes; rebuilding.');
@@ -152,14 +161,14 @@ class MergeQueue({
       }
 
       if (clock().toUtc().difference(waiting.first.enqueuedAt) <
-          config.collectWindow) {
+          config.queue.collectWindow) {
         _save();
 
         return false;
       }
 
       state.groups.add(
-        waiting.take(config.maxBatchSize).map((e) => e.mr.iid).toList(),
+        waiting.take(config.queue.maxBatchSize).map((e) => e.mr.iid).toList(),
       );
     }
 
@@ -207,6 +216,7 @@ class MergeQueue({
       baseSha: await hosting.branchSha(project.id, target),
       members: state.groups.first.map((id) => eligible[id]!).toList(),
       createdAt: timestamp,
+      landingMode: landingMode,
       expectedRemoteSha: remote,
     );
     _save();
@@ -249,7 +259,7 @@ class MergeQueue({
       'Batch into `$target` from `${c.baseSha}`.\n\n'
       '${c.members.map((m) => '- [!${m.iid}](${m.url}) `${m.sha}`').join('\n')}\n\n'
       'Candidate: `${c.sha}`.\n'
-      'Pipeline discovery window: ${config.discoveryWindow.inSeconds}s. '
+      'Pipeline discovery window: ${config.pipelines.discoveryWindow.inSeconds}s. '
       'No pipelines found during that window means this batch can merge untested.';
 
   Future<void> _publish(Candidate c) async {
@@ -295,9 +305,9 @@ class MergeQueue({
   Future<void> _observe(Candidate c) async {
     final elapsed = clock().toUtc().difference(c.startedAt!);
 
-    if (elapsed >= config.pipelineTimeout) {
+    if (elapsed >= config.pipelines.timeout) {
       await _pause(
-        'Pipeline/merge timeout after ${config.pipelineTimeout.inSeconds}s.',
+        'Pipeline/merge timeout after ${config.pipelines.timeout.inSeconds}s.',
       );
 
       return;
@@ -316,7 +326,7 @@ class MergeQueue({
     // GitLab updates MR head metadata asynchronously after a force-push.
     if (batch.sha != c.sha) return;
 
-    if (elapsed < config.discoveryWindow) return;
+    if (elapsed < config.pipelines.discoveryWindow) return;
 
     if (c.pipelineIds == null) {
       final pipelines = await hosting.pipelines(project.id, batch.iid, c.sha!);
@@ -361,7 +371,8 @@ class MergeQueue({
 
     // Revalidate project settings and all inputs immediately before merging.
     try {
-      (await hosting.project(project.id.toString())).validate();
+      (await hosting.project(project.id.toString()))
+          .validate(landingMode: c.landingMode);
     } on StateError catch (error) {
       await _pause('Project settings no longer support this queue: $error');
 
@@ -389,21 +400,38 @@ class MergeQueue({
       return;
     }
 
-    if (ready.sha != c.sha || !await _mergeable(ready)) return;
+    if (ready.state != 'opened' ||
+        ready.sha != c.sha ||
+        !await _mergeable(
+          ready,
+          requireExplicit: c.landingMode == LandingMode.fastForwardPush,
+        )) {
+      return;
+    }
 
     c.phase = 'merging';
     _save();
 
     try {
-      await hosting.mergeBatch(project.id, batch.iid, c.sha!);
+      if (c.landingMode == LandingMode.fastForwardPush) {
+        await repository.fastForward(project, target, c.baseSha, c.sha!);
+      } else {
+        await hosting.mergeBatch(project.id, batch.iid, c.sha!);
+      }
     } on RemoteException catch (error) {
-      // The API response can be lost after a successful merge. Resolve that
-      // before rebuilding, pausing, or retrying the request.
+      // A response can be lost after a successful merge or push. Resolve that
+      // before rebuilding, pausing, or retrying the write.
       if (await _reconcileLanded()) return;
 
       if (!await _unchanged(c)) {
         state.candidate = null;
         _save();
+
+        return;
+      }
+
+      if (c.landingMode == LandingMode.fastForwardPush) {
+        await _pause('Fast-forward push did not complete: $error');
 
         return;
       }
@@ -428,10 +456,15 @@ class MergeQueue({
     await _reconcileLanded();
   }
 
-  Future<bool> _mergeable(BatchRef batch) async {
+  Future<bool> _mergeable(
+    BatchRef batch, {
+    bool requireExplicit = false,
+  }) async {
     final status = batch.detailedMergeStatus;
 
-    if (status == null || status == 'mergeable') return true;
+    if (status == null) return !requireExplicit;
+
+    if (status == 'mergeable') return true;
 
     const waiting = {
       'unchecked',
@@ -550,8 +583,26 @@ class MergeQueue({
     if (state.batchIid == null) return false;
 
     final batch = await hosting.batch(project.id, state.batchIid!);
+    final c = state.candidate;
 
-    if (batch.state == 'closed') {
+    if (!_matchesQueue(batch)) {
+      if (state.paused == null) {
+        await _pause('Batch MR source or target was changed outside the bot.');
+      }
+
+      return true;
+    }
+
+    // Direct pushes may land before GitLab marks the MR merged. Reconcile the
+    // durable target before resetting a paused intent or inspecting the sources.
+    final pushed =
+        c != null &&
+        c.landingMode == LandingMode.fastForwardPush &&
+        c.sha != null &&
+        {'merging', 'finalizing'}.contains(c.phase) &&
+        await repository.contains(project, target, c.sha!);
+
+    if (batch.state == 'closed' && !pushed) {
       if (_retryPaused) {
         _retryPaused = false;
         state.batchIid = null;
@@ -570,23 +621,13 @@ class MergeQueue({
       return true;
     }
 
-    if (!_matchesQueue(batch)) {
-      if (state.paused == null) {
-        await _pause('Batch MR source or target was changed outside the bot.');
-      }
-
-      return true;
-    }
-
-    if (batch.state != 'merged') return false;
-
-    final c = state.candidate;
+    if (batch.state != 'merged' && !pushed) return false;
 
     if (c == null ||
         c.sha == null ||
         batch.sha != c.sha ||
         (batch.mergeCommitSha != null && batch.mergeCommitSha != c.sha) ||
-        !await repository.contains(project, target, c.sha!)) {
+        (!pushed && !await repository.contains(project, target, c.sha!))) {
       if (state.paused == null) {
         await _pause(
           'Merged batch differs from the recorded candidate; manual reconciliation required.',
@@ -662,6 +703,29 @@ class MergeQueue({
 
       c.finalized.add(member.iid);
       _save();
+    }
+
+    if (c.landingMode == LandingMode.fastForwardPush) {
+      final latest = await hosting.batch(project.id, batch.iid);
+
+      if (!_matchesQueue(latest) || latest.sha != c.sha) {
+        await _pause(
+          'Landed batch MR was changed; manual reconciliation required.',
+        );
+
+        return true;
+      }
+
+      if (latest.state == 'opened') {
+        await hosting.commentOnce(
+          project.id,
+          batch.iid,
+          'landed:${c.sha}:batch',
+          'Candidate `${c.sha}` landed by a fast-forward push to `$target`. '
+              'Closing this batch MR because GitLab has not marked it merged.',
+        );
+        await hosting.closeMergeRequest(project.id, batch.iid);
+      }
     }
 
     state.groups.removeAt(0);
