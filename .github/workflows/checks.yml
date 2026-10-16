@@ -23,8 +23,17 @@ permissions:
 
 jobs:
   checks:
-    name: Dart and Docker
-    runs-on: ubuntu-24.04
+    name: Dart and Docker (${{ matrix.arch }})
+    strategy:
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     outputs:
       checked-sha: ${{ steps.revision.outputs.sha }}
@@ -63,7 +72,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           load: true
           push: false
           tags: merge-queue-bot:ci
@@ -74,8 +83,10 @@ jobs:
             --mount "type=bind,src=$PWD/config.example.yaml,dst=/config/config.yaml,readonly" \
             merge-queue-bot:ci --config /config/config.yaml --check-config
       - name: Package CLI bundle
+        if: matrix.arch == 'x64'
         run: tar -czf merge-queue-bot-linux-x64.tar.gz -C build/bundle .
       - name: Upload CLI bundle
+        if: matrix.arch == 'x64'
         uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact-name }}
