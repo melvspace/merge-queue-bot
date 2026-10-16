@@ -1,6 +1,6 @@
 name: merge_queue_bot
 description: A persistent GitLab batch merge queue.
-version: 0.2.1
+version: 0.3.0
 publish_to: none
 environment:
   sdk: ^3.13.0
