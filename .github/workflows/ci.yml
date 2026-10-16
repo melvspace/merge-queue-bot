@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: ['**', '!release-please--**']
   pull_request:
   workflow_dispatch:
 
@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   checks:
+    if: "!startsWith(github.head_ref, 'release-please--')"
     uses: ./.github/workflows/checks.yml
 
   release-please:
