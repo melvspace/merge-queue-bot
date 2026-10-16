@@ -20,14 +20,30 @@ class const Project({
   final bool mergedResultsPipelines = false,
 }) with _$Project {
   void validate() {
-    if (mergeMethod != 'ff' ||
-        !const {'never', 'default_off', 'default_on'}.contains(squashOption) ||
-        automaticRebase ||
-        mergedResultsPipelines) {
+    final problems = <String>[];
+
+    if (mergeMethod != 'ff') {
+      problems.add('merge_method="$mergeMethod"; expected "ff" (fast-forward)');
+    }
+
+    if (!const {'never', 'default_off', 'default_on'}.contains(squashOption)) {
+      problems.add(
+        'squash_option="$squashOption"; expected "never", "default_off", '
+        'or "default_on" (disabled or optional)',
+      );
+    }
+
+    if (automaticRebase) {
+      problems.add('automatic_rebase_enabled=true; expected false');
+    }
+
+    if (mergedResultsPipelines) {
+      problems.add('merge_pipelines_enabled=true; expected false');
+    }
+
+    if (problems.isNotEmpty) {
       throw StateError(
-        '$path requires fast-forward merges, optional/disabled '
-        'squashing, automatic rebase disabled, and merged-results pipelines '
-        'disabled.',
+        '$path has incompatible project settings: ${problems.join(' | ')}.',
       );
     }
   }
